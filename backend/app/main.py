@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.router import api_router
 from app.config import get_settings
 
 settings = get_settings()
@@ -25,14 +26,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(api_router)
+
 
 @app.get("/", tags=["meta"])
 async def root() -> dict[str, str]:
     """Service banner."""
-    return {"service": settings.app_name, "version": __version__, "status": "ok"}
+    return {"status": "ok", "service": settings.app_name}
 
 
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     """Liveness/health probe."""
-    return {"status": "healthy", "env": settings.app_env}
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "version": __version__,
+        "environment": settings.environment,
+    }

@@ -21,7 +21,7 @@ alembic>=1.13
 
 # Auth / security
 python-jose[cryptography]>=3.3
-passlib[bcrypt]>=1.7
+bcrypt>=4.1
 
 # AI / LLM orchestration
 langgraph>=0.2
