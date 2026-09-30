@@ -8,12 +8,17 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Typed application settings."""
+    """Typed application settings.
+
+    Phase 1 requires four canonical values — DATABASE_URL, JWT_SECRET,
+    MODEL_NAME, ENVIRONMENT — each of which also accepts a legacy alias so
+    existing `.env` files keep working.
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,7 +29,10 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "AegisAI"
-    app_env: str = "development"
+    environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"),
+    )
     debug: bool = True
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -35,13 +43,19 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://aegis:aegis@localhost:5432/aegisai"
 
     # Security
-    jwt_secret_key: str = "change-me"
+    jwt_secret: str = Field(
+        default="change-me",
+        validation_alias=AliasChoices("JWT_SECRET", "JWT_SECRET_KEY"),
+    )
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
 
     # AI / LLM
+    model_name: str = Field(
+        default="llama3.1:8b",
+        validation_alias=AliasChoices("MODEL_NAME", "OLLAMA_MODEL"),
+    )
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
     ollama_timeout: int = 120
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
@@ -60,6 +74,11 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS origins as a clean list."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        """True when running in a production environment."""
+        return self.environment.lower() in {"production", "prod"}
 
 
 @lru_cache
