@@ -1,0 +1,41 @@
+# ===========================================================================
+# AegisAI — Default Policy Set
+# ---------------------------------------------------------------------------
+# Declarative rules governing what agents are allowed to do. These are loaded
+# by the policy engine (app/policies) and evaluated on every agent action.
+# This is a Phase 0 placeholder to be expanded in Phase 3.
+# ===========================================================================
+
+version: 1
+
+defaults:
+  trust_threshold: 0.6           # minimum trust score to permit an action
+  firewall_block_threshold: 0.8  # injection score at/above which input is blocked
+  default_action: deny           # deny anything not explicitly allowed
+
+tools:
+  - name: web_search
+    allowed: true
+    min_trust: 0.5
+    rate_limit_per_min: 30
+
+  - name: file_read
+    allowed: true
+    min_trust: 0.7
+    constraints:
+      allowed_paths: ["./data", "./docs"]
+
+  - name: file_write
+    allowed: false
+    min_trust: 0.9
+
+  - name: shell_exec
+    allowed: false
+
+rag:
+  allow_untrusted_sources: false
+  max_context_chunks: 5
+
+audit:
+  log_all_decisions: true
+  log_blocked_only: false
