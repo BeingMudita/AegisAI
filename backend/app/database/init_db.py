@@ -24,7 +24,7 @@ async def init_db() -> None:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
-    print("✅ Database initialized: pgvector enabled, tables created.")
+    print("Database initialized: pgvector enabled, tables created.")
 
 
 if __name__ == "__main__":
