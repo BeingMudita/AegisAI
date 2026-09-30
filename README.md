@@ -101,6 +101,79 @@ docker compose -f docker/docker-compose.yml up --build
 
 ---
 
+## 🔎 RAG Pipeline (Phase 3)
+
+Ordinary retrieval-augmented generation over the sample dataset in `data/`:
+
+```
+PDF / TXT / MD → text extraction → chunking → embeddings → PostgreSQL + pgvector
+Question → embedding → cosine vector search → top-K chunks → LLM → answer
+```
+
+- **Embeddings**: Sentence-Transformers (`EMBEDDING_MODEL`), with a deterministic
+  hashing fallback when the library/model is unavailable (offline/CI).
+- **LLM**: Ollama (`MODEL_NAME`) via `/api/generate`.
+- **Endpoints**: `POST /api/retrieval/search` (top-K chunks) and
+  `POST /api/retrieval/ask` (full RAG answer).
+- **Ingestion CLI**: `python -m app.rag.ingest ../data`
+
+---
+
+## ✅ Testing What's Built
+
+### A. Automated tests (no external services needed)
+```bash
+cd backend
+python -m venv .venv && .venv\Scripts\activate      # (Unix: source .venv/bin/activate)
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q
+```
+Covers config, JWT auth + RBAC, all 12 ORM models, the policy engine, and RAG
+components (chunking, embeddings, PDF/MD extraction, prompt building).
+
+### B. End-to-end RAG (needs Docker + Ollama)
+```bash
+# 1. Start PostgreSQL + pgvector
+docker compose -f docker/docker-compose.yml up -d db
+
+# 2. Start Ollama and pull the model
+ollama serve            # (in its own terminal)
+ollama pull llama3.1:8b
+
+# 3. Generate sample data (once) and initialize the DB
+python data/generate_sample_data.py
+cd backend
+python -m app.database.init_db
+
+# 4. Ingest the documents
+python -m app.rag.ingest ../data
+
+# 5. Run the API
+uvicorn app.main:app --reload
+```
+Then, in another terminal:
+```bash
+# Log in (get a JWT)
+TOKEN=$(curl -s -X POST localhost:8000/api/auth/login \
+  -d "username=analyst&password=analyst123" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+# Vector search
+curl -s -X POST localhost:8000/api/retrieval/search \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"Which invoices are overdue?","top_k":3}'
+
+# Full RAG answer
+curl -s -X POST localhost:8000/api/retrieval/ask \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"Which invoices are overdue?"}'
+```
+Expected: chunks from `invoice_03`, `invoice_42`, and the reminder emails rank
+highest; the answer names **INV-0003** and **INV-0042** as overdue.
+
+Interactive API docs: http://localhost:8000/docs
+
+---
+
 ## 🔐 Secrets
 
 Never commit `.env`, API keys, database passwords, or JWT secrets.
@@ -113,12 +186,13 @@ Use `.env.example` as the template; the real `.env` is git-ignored.
 - [x] **Phase 0** — Project initialization & scaffolding
 - [x] **Phase 1** — Backend foundation (API structure, config, JWT auth)
 - [x] **Phase 2** — Database & policy system
-- [ ] **Phase 3** — Firewall (prompt-injection detection)
-- [ ] **Phase 4** — Trust engine
-- [ ] **Phase 5** — Agents + RAG
-- [ ] **Phase 6** — Frontend dashboard
-- [ ] **Phase 7** — Attack scenarios & evaluation
-- [ ] **Phase 8** — Deployment
+- [x] **Phase 3** — Basic RAG pipeline (ingest → embed → retrieve → answer)
+- [ ] **Phase 4** — Firewall (prompt-injection detection)
+- [ ] **Phase 5** — Trust engine
+- [ ] **Phase 6** — Agents
+- [ ] **Phase 7** — Frontend dashboard
+- [ ] **Phase 8** — Attack scenarios & evaluation
+- [ ] **Phase 9** — Deployment
 
 ---
 

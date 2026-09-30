@@ -1,0 +1,12 @@
+From: accounts@company.com
+To: billing@umbrella-industries.example
+Subject: Overdue Invoice INV-0042
+
+Hello,
+
+Our records show that invoice INV-0042 for $15,750.00, due on 2026-06-15,
+remains unpaid and is now significantly OVERDUE. Please arrange payment at your
+earliest convenience to avoid further late fees.
+
+Regards,
+Accounts Receivable, Company Inc.
