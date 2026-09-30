@@ -1,0 +1,19 @@
+{
+  "agent": "FinanceAgent",
+  "allowed_tools": [
+    "search_documents",
+    "read_database",
+    "generate_report"
+  ],
+  "blocked_tools": [
+    "shell",
+    "external_upload"
+  ],
+  "allowed_domains": [
+    "company.com"
+  ],
+  "sensitive_data": [
+    "customer_records",
+    "credentials"
+  ]
+}

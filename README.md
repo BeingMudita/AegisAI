@@ -111,13 +111,14 @@ Use `.env.example` as the template; the real `.env` is git-ignored.
 ## 🗺️ Roadmap
 
 - [x] **Phase 0** — Project initialization & scaffolding
-- [ ] **Phase 1** — Database & core models
-- [ ] **Phase 2** — Firewall (prompt-injection detection)
-- [ ] **Phase 3** — Trust engine & policies
-- [ ] **Phase 4** — Agents + RAG
-- [ ] **Phase 5** — Frontend dashboard
-- [ ] **Phase 6** — Attack scenarios & evaluation
-- [ ] **Phase 7** — Deployment
+- [x] **Phase 1** — Backend foundation (API structure, config, JWT auth)
+- [x] **Phase 2** — Database & policy system
+- [ ] **Phase 3** — Firewall (prompt-injection detection)
+- [ ] **Phase 4** — Trust engine
+- [ ] **Phase 5** — Agents + RAG
+- [ ] **Phase 6** — Frontend dashboard
+- [ ] **Phase 7** — Attack scenarios & evaluation
+- [ ] **Phase 8** — Deployment
 
 ---
 

@@ -41,4 +41,29 @@ Input ─▶ Firewall ─▶ Trust Engine ─▶ Policy Engine ─▶ Agent (Lan
 
 ## Data stores
 
-- **PostgreSQL + pgvector** — relational data and vector embeddings.
+- **PostgreSQL + pgvector** — relational data and vector embeddings. PostgreSQL
+  is the source of truth for all state.
+
+### Schema (Phase 2)
+
+| Group | Tables |
+|-------|--------|
+| Identity & governance | `users`, `agents`, `policies`, `agent_sessions` |
+| RAG knowledge base | `document_sources`, `documents`, `document_chunks`, `embeddings` |
+| Security | `trust_assessments`, `tool_definitions`, `tool_requests`, `security_events` |
+
+Models live in `app/database/models/`; `embeddings.vector` is a pgvector
+`Vector(EMBEDDING_DIM)` column. Bootstrap locally with:
+
+```bash
+cd backend
+python -m app.database.init_db   # enables pgvector + creates tables
+```
+
+## Policy engine
+
+`app/policies/engine.py` answers *"what is this agent allowed to do?"* over an
+`AgentPolicy` document (deny-by-default for tools; block-list wins over
+allow-list; domain matching includes subdomains). Policies are currently loaded
+from `app/policies/examples/*.json` via `app/policies/store.py`, moving to the
+`policies` table as the persistent source.

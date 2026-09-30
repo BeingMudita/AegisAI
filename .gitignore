@@ -76,7 +76,8 @@ pgdata/
 *.dump
 
 # Local models / embeddings cache (Ollama, sentence-transformers)
-models/
+# NB: anchored to repo root so it does not match app/database/models/
+/models/
 .cache/
 *.gguf
 
