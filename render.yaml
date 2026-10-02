@@ -1,0 +1,31 @@
+# Render Blueprint — deploys the AegisAI API.
+# New → Blueprint → select this repo. You'll be prompted for the values
+# marked `sync: false`. The app refuses to start in production while any
+# development default is in use.
+services:
+  - type: web
+    name: aegisai-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.backend
+    dockerContext: .
+    healthCheckPath: /health
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_ANALYST_PASSWORD
+        sync: false
+      - key: SEED_AGENT_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS        # your Vercel URL, e.g. https://aegisai.vercel.app
+        sync: false
+      - key: LLM_BACKEND         # no GPU on the free plan; point OLLAMA_BASE_URL at a host to use one
+        value: rule_based
+      - key: EMBEDDING_BACKEND
+        value: hashing

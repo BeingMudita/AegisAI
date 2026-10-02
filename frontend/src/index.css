@@ -1,0 +1,142 @@
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens. Light is the default; dark has its own selected steps (not an
+   automatic flip). The OS setting applies unless the viewer picked a theme.
+   Chart colors: series-1 for single-series magnitude; allowed/denied pair is
+   blue ↔ red (validated for CVD — green ↔ red fails); status colors are
+   reserved for state and always ship with an icon + label.
+--------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --page: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #f3f4f7;
+  --ink: #0f172a;
+  --ink-2: #475569;
+  --muted: #8a8f9c;
+  --grid: #e5e7ec;
+  --axis: #c9ccd4;
+  --border: rgba(15, 23, 42, 0.09);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+  --series-1: #2a78d6;
+  --series-1-track: #cde2fb;
+  --brand: #2a78d6;
+  --brand-2: #4a3aa7;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  /* the sidebar is dark in both themes */
+  --nav-bg: #0d1424;
+  --nav-ink: #e2e8f0;
+  --nav-ink-2: #94a3b8;
+  --nav-hover: rgba(255, 255, 255, 0.06);
+  --nav-active: rgba(57, 135, 229, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0b0d12;
+    --surface: #151821;
+    --surface-2: #1d212c;
+    --ink: #f1f5f9;
+    --ink-2: #b4bccb;
+    --muted: #7d8595;
+    --grid: #262b37;
+    --axis: #363c4a;
+    --border: rgba(255, 255, 255, 0.08);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --series-1: #3987e5;
+    --series-1-track: #184f95;
+    --brand: #3987e5;
+    --brand-2: #9085e9;
+    --nav-bg: #080b12;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b0d12;
+  --surface: #151821;
+  --surface-2: #1d212c;
+  --ink: #f1f5f9;
+  --ink-2: #b4bccb;
+  --muted: #7d8595;
+  --grid: #262b37;
+  --axis: #363c4a;
+  --border: rgba(255, 255, 255, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --series-1: #3987e5;
+  --series-1-track: #184f95;
+  --brand: #3987e5;
+  --brand-2: #9085e9;
+  --nav-bg: #080b12;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-grid: var(--grid);
+  --color-edge: var(--border);
+  --color-accent: var(--series-1);
+  --color-brand: var(--brand);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-critical: var(--critical);
+  --color-nav: var(--nav-bg);
+  --color-nav-ink: var(--nav-ink);
+  --color-nav-ink-2: var(--nav-ink-2);
+  --shadow-card: var(--shadow);
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.brand-gradient {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+}
+
+/* Recharts focus outline on click is noise; keyboard focus still shows. */
+.recharts-wrapper :focus:not(:focus-visible) {
+  outline: none;
+}
+
+@keyframes flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 24px 0;
+  }
+}
+
+/* animated connector between active pipeline stages */
+.flow-active {
+  background-image: linear-gradient(90deg, var(--series-1) 50%, transparent 50%);
+  background-size: 12px 2px;
+  animation: flow 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-active {
+    animation: none;
+  }
+}

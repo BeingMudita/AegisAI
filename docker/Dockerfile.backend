@@ -1,20 +1,34 @@
 # AegisAI backend image
+#   docker build -f docker/Dockerfile.backend .                       # slim (hashing embedder)
+#   docker build -f docker/Dockerfile.backend --build-arg INSTALL_ML=true .   # + sentence-transformers
 FROM python:3.11-slim
 
+ARG INSTALL_ML=false
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8
 
 WORKDIR /app
 
 # System deps for psycopg2 / building wheels
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev \
+    build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements.txt backend/requirements-ml.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && if [ "$INSTALL_ML" = "true" ]; then pip install --no-cache-dir -r requirements-ml.txt; fi
 
 COPY backend/ ./
 
+# Run as an unprivileged user.
+RUN useradd --create-home --uid 10001 aegis && chown -R aegis /app
+USER aegis
+
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:${PORT:-8000}/health || exit 1
+
+# PORT is injected by hosts such as Render; defaults to 8000 locally.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]

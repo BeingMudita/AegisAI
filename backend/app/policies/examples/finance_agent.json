@@ -3,7 +3,8 @@
   "allowed_tools": [
     "search_documents",
     "read_database",
-    "generate_report"
+    "generate_report",
+    "send_email"
   ],
   "blocked_tools": [
     "shell",
