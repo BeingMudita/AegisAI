@@ -93,6 +93,12 @@ pgdata/
 .DS_Store
 Thumbs.db
 
+# Ingestion data: uploads, inbox and the saved index (backend/data/)
+backend/data/
+
+# Generated evaluation output (regenerate with evaluation/run_eval.py; CI uploads it)
+evaluation/results/
+
 # ---------------------------------------------------------------------------
 # Logs & temp
 # ---------------------------------------------------------------------------

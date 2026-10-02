@@ -1,0 +1,36 @@
+# Demo corpus ingested on first use (RAG_SEED_CORPUS=true).
+# Two documents are adversarial on purpose:
+#   * vendor_faq.md hides an indirect prompt injection → quarantined at ingestion
+#   * community_forum.md comes from an UNTRUSTED source → dropped at retrieval
+documents:
+  - file: finance_handbook.md
+    title: Finance Handbook
+    source: Finance Handbook
+    source_type: FILE
+    trust_level: VERIFIED
+
+  - file: q3_report.md
+    title: Q3 2026 Financial Report
+    source: Finance Reports
+    source_type: FILE
+    trust_level: HIGH
+
+  - file: security_guidelines.md
+    title: Information Security Guidelines
+    source: IT Security
+    source_type: FILE
+    trust_level: VERIFIED
+
+  - file: vendor_faq.md
+    title: Vendor Payments FAQ
+    source: Vendor Portal
+    source_type: URL
+    trust_level: LOW
+    uri: https://vendors.example-portal.biz/faq
+
+  - file: community_forum.md
+    title: "Forum: getting invoices paid faster"
+    source: Public Forum
+    source_type: URL
+    trust_level: UNTRUSTED
+    uri: https://forum.example.net/t/invoices
