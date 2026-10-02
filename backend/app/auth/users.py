@@ -10,12 +10,15 @@ from __future__ import annotations
 from app.auth.roles import Role
 from app.auth.schemas import UserInDB
 from app.auth.security import hash_password
+from app.config import get_settings
 
-# Local-dev seed accounts — do NOT ship these to production.
+# Seed accounts. Passwords come from SEED_*_PASSWORD; the defaults are for
+# local development only and production refuses to start with them.
+_settings = get_settings()
 _SEED = [
-    ("admin", "admin123", Role.ADMIN),
-    ("analyst", "analyst123", Role.SECURITY_ANALYST),
-    ("agent", "agent123", Role.AGENT),
+    ("admin", _settings.seed_admin_password, Role.ADMIN),
+    ("analyst", _settings.seed_analyst_password, Role.SECURITY_ANALYST),
+    ("agent", _settings.seed_agent_password, Role.AGENT),
 ]
 
 _USERS: dict[str, UserInDB] = {

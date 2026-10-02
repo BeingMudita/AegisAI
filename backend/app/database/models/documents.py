@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

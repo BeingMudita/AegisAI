@@ -7,9 +7,12 @@ and secrets are read from the (git-ignored) `.env` file.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Settings(BaseSettings):
@@ -50,6 +53,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
 
+    # Seed accounts for the in-memory user store (development defaults —
+    # production refuses to start while any of these are unchanged).
+    seed_admin_password: str = "admin123"
+    seed_analyst_password: str = "analyst123"
+    seed_agent_password: str = "agent123"
+
     # AI / LLM
     model_name: str = Field(
         default="llama3.1:8b",
@@ -57,18 +66,44 @@ class Settings(BaseSettings):
     )
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout: int = 120
+    # auto = use Ollama when reachable, else the deterministic rule-based planner
+    llm_backend: str = "auto"  # auto | ollama | rule_based
+    agent_max_steps: int = 3
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
+    # auto = sentence-transformers when installed, else a dependency-free hashing embedder
+    embedding_backend: str = "auto"  # auto | sentence_transformers | hashing
 
     # RAG
     rag_chunk_size: int = 512
     rag_chunk_overlap: int = 64
     rag_top_k: int = 5
+    rag_seed_corpus: bool = True  # ingest app/rag/seed/ on first use
+
+    # Data ingestion — uploads/, inbox/ and index/ live under data_dir
+    # (relative paths are resolved against the backend/ directory).
+    data_dir: str = "data"
+    max_upload_mb: int = 1024  # per file, for browser uploads
+    rag_persist: bool = True  # save the index to data/index/ and reload it on start
+    ingest_batch_size: int = 256  # chunks screened + embedded per batch
 
     # Trust / Firewall / Policies
     trust_threshold: float = 0.6
     firewall_block_threshold: float = 0.8
+    firewall_flag_threshold: float = 0.4
     policy_config_path: str = "app/policies/default_policies.yaml"
+
+    # Telemetry
+    audit_buffer_size: int = 5000
+
+    def data_path(self, *parts: str) -> Path:
+        """A path under ``data_dir`` (created on demand)."""
+        base = Path(self.data_dir)
+        if not base.is_absolute():
+            base = _BACKEND_ROOT / base
+        path = base.joinpath(*parts)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -79,6 +114,19 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """True when running in a production environment."""
         return self.environment.lower() in {"production", "prod"}
+
+    def insecure_defaults(self) -> list[str]:
+        """Names of security settings still at their development defaults."""
+        defaults = {
+            "JWT_SECRET": (self.jwt_secret, {"change-me", "generate_a_long_random_secret"}),
+            "SEED_ADMIN_PASSWORD": (self.seed_admin_password, {"admin123"}),
+            "SEED_ANALYST_PASSWORD": (self.seed_analyst_password, {"analyst123"}),
+            "SEED_AGENT_PASSWORD": (self.seed_agent_password, {"agent123"}),
+        }
+        found = [name for name, (value, bad) in defaults.items() if value in bad]
+        if len(self.jwt_secret) < 32 and "JWT_SECRET" not in found:
+            found.append("JWT_SECRET (shorter than 32 characters)")
+        return found
 
 
 @lru_cache

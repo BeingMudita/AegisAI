@@ -10,6 +10,12 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "B008",   # FastAPI's Depends()/Query() in defaults is the framework idiom
+  "UP017",  # timezone.utc is used consistently across the codebase
+  "UP037",  # quoted forward refs in SQLAlchemy Mapped[] annotations
+  "UP042",  # (str, Enum) kept for pydantic/SQLAlchemy enum compatibility
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,0 +1,20 @@
+{
+  "agent": "ResearchAgent",
+  "allowed_tools": [
+    "search_documents",
+    "web_fetch",
+    "generate_report"
+  ],
+  "blocked_tools": [
+    "shell",
+    "external_upload",
+    "read_database",
+    "send_email"
+  ],
+  "allowed_domains": [
+    "company.com",
+    "wikipedia.org",
+    "arxiv.org"
+  ],
+  "sensitive_data": []
+}

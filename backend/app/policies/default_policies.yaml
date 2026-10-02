@@ -1,39 +1,72 @@
 # ===========================================================================
-# AegisAI — Default Policy Set
+# AegisAI — Global Policy Set
 # ---------------------------------------------------------------------------
-# Declarative rules governing what agents are allowed to do. These are loaded
-# by the policy engine (app/policies) and evaluated on every agent action.
-# This is a Phase 0 placeholder to be expanded in Phase 3.
+# System-wide rules that apply to every agent, loaded by
+# app/policies/config.py. Per-agent allow/block lists live in
+# app/policies/examples/*.json; a tool must pass BOTH layers.
+#
+# Numeric thresholds (TRUST_THRESHOLD, FIREWALL_BLOCK_THRESHOLD,
+# FIREWALL_FLAG_THRESHOLD) are set in the environment — see .env.example.
 # ===========================================================================
 
 version: 1
 
 defaults:
-  trust_threshold: 0.6           # minimum trust score to permit an action
-  firewall_block_threshold: 0.8  # injection score at/above which input is blocked
-  default_action: deny           # deny anything not explicitly allowed
+  default_action: deny           # tools not listed below are refused
 
+# Tool registry. `allowed: false` is a global kill switch that overrides any
+# agent policy. `min_trust` is the agent trust score needed to call the tool.
 tools:
-  - name: web_search
+  - name: search_documents
+    description: Semantic search over the company knowledge base.
+    risk_level: LOW
+    allowed: true
+    min_trust: 0.4
+    rate_limit_per_min: 60
+
+  - name: read_database
+    description: Read-only lookup in the finance database (customers, invoices).
+    risk_level: MEDIUM
+    allowed: true
+    min_trust: 0.6
+    rate_limit_per_min: 30
+    data_category: customer_records
+
+  - name: generate_report
+    description: Format findings into a markdown report.
+    risk_level: LOW
     allowed: true
     min_trust: 0.5
-    rate_limit_per_min: 30
+    rate_limit_per_min: 20
 
-  - name: file_read
+  - name: web_fetch
+    description: Fetch a web page from an allow-listed domain.
+    risk_level: MEDIUM
     allowed: true
-    min_trust: 0.7
-    constraints:
-      allowed_paths: ["./data", "./docs"]
+    min_trust: 0.6
+    rate_limit_per_min: 20
 
-  - name: file_write
+  - name: send_email
+    description: Send an email to an address on an allow-listed domain.
+    risk_level: HIGH
+    allowed: true
+    min_trust: 0.8
+    rate_limit_per_min: 5
+
+  - name: external_upload
+    description: Upload a file to an external service.
+    risk_level: CRITICAL
     allowed: false
-    min_trust: 0.9
 
-  - name: shell_exec
+  - name: shell
+    description: Execute a shell command.
+    risk_level: CRITICAL
     allowed: false
 
 rag:
-  allow_untrusted_sources: false
+  allow_untrusted_sources: false # drop chunks from UNTRUSTED sources at retrieval
+  min_source_trust: 0.3          # drop chunks whose source trust fell below this
+  min_similarity: 0.15           # ignore weak matches
   max_context_chunks: 5
 
 audit:
