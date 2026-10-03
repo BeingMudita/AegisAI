@@ -16,6 +16,7 @@ every edge.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any, TypedDict
 
@@ -49,6 +50,7 @@ SUSPENDED = (
 
 
 class AgentState(TypedDict, total=False):
+    progress: Callable[[TraceEntry], None] | None
     agent: str
     session_id: str
     message: str
@@ -86,12 +88,15 @@ class AgentRuntime:
     # ---------------------------------------------------------------- graph
     def _build(self) -> Any:
         g = StateGraph(AgentState)
-        g.add_node("guard_input", self.guard_input)
-        g.add_node("retrieve", self.retrieve)
-        g.add_node("plan", self.plan)
-        g.add_node("act", self.act)
-        g.add_node("respond", self.respond)
-        g.add_node("guard_output", self.guard_output)
+        for name, stage, node in [
+            ("guard_input", "input_firewall", self.guard_input),
+            ("retrieve", "retrieval", self.retrieve),
+            ("plan", "plan", self.plan),
+            ("act", "tool", self.act),
+            ("respond", "respond", self.respond),
+            ("guard_output", "output_guard", self.guard_output),
+        ]:
+            g.add_node(name, self._observed(stage, node))
 
         g.add_edge(START, "guard_input")
         g.add_conditional_edges(
@@ -105,6 +110,28 @@ class AgentRuntime:
         g.add_edge("respond", "guard_output")
         g.add_edge("guard_output", END)
         return g.compile()
+
+    @staticmethod
+    def _observed(stage: str, node: Callable[[AgentState], AgentState]) -> Callable:
+        """Publish real node boundaries without exposing unfinished model output."""
+
+        def run(state: AgentState) -> AgentState:
+            callback = state.get("progress")
+            if callback:
+                callback(TraceEntry(stage=stage, status="running", detail="Processing"))
+            result = node(state)
+            if callback:
+                entries = result.get("trace", [])
+                entry = (
+                    entries[-1]
+                    if entries and entries[-1].stage == stage
+                    else TraceEntry(stage=stage, status="passed", detail="Stage completed.")
+                )
+                # Progress exposes status only; detailed evidence stays in the final guarded turn.
+                callback(TraceEntry(stage=stage, status=entry.status, detail="Stage completed."))
+            return result
+
+        return run
 
     @staticmethod
     def _trace(state: AgentState, *entries: TraceEntry) -> list[TraceEntry]:
@@ -248,10 +275,28 @@ class AgentRuntime:
 
     def plan(self, state: AgentState) -> AgentState:
         if len(state.get("steps", [])) >= self.max_steps:
-            return {"pending": None}
+            return {
+                "pending": None,
+                "trace": self._trace(
+                    state,
+                    TraceEntry(
+                        stage="plan",
+                        status="skipped",
+                        detail="Tool step limit reached; compose answer.",
+                    ),
+                ),
+            }
         action = self.brain.decide(self._context(state))
         if action.kind != "tool" or not action.tool:
-            return {"pending": None}
+            return {
+                "pending": None,
+                "trace": self._trace(
+                    state,
+                    TraceEntry(
+                        stage="plan", status="passed", detail="No further tool action needed."
+                    ),
+                ),
+            }
         return {
             "pending": action,
             "trace": self._trace(
@@ -355,6 +400,7 @@ class AgentRuntime:
         session_id: str,
         message: str,
         history: list[tuple[str, str]] | None = None,
+        progress: Callable[[TraceEntry], None] | None = None,
     ) -> AgentTurn:
         started = time.perf_counter()
         final: AgentState = self.graph.invoke(
@@ -363,6 +409,7 @@ class AgentRuntime:
                 "session_id": session_id,
                 "message": message,
                 "history": history or [],
+                "progress": progress,
             },
             config={"recursion_limit": 6 + 2 * self.max_steps},
         )

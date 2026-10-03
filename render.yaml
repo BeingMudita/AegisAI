@@ -29,3 +29,14 @@ services:
         value: rule_based
       - key: EMBEDDING_BACKEND
         value: hashing
+      - key: STORAGE_BACKEND
+        value: postgres
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aegisai-db
+          property: connectionString
+
+databases:
+  - name: aegisai-db
+    plan: free
+    postgresMajorVersion: "16"

@@ -77,6 +77,7 @@ class IngestionManager:
                 if not self._jobs[oldest].done:
                     break
                 self._jobs.pop(oldest)
+        self._publish(job)
         self._queue.put(job.id)
         self._ensure_worker()
         return job
@@ -158,7 +159,16 @@ class IngestionManager:
             if job.stage == IngestStage.QUEUED:
                 job.stage = IngestStage.CANCELLED
                 job.finished_at = _now()
-            return job.model_copy()
+            snapshot = job.model_copy()
+        self._publish(snapshot)
+        return snapshot
+
+    # Hooks — the Postgres manager shares job state through ``ingest_jobs``.
+    def _publish(self, job: IngestJob) -> None:
+        """Called with a snapshot after every change to a job."""
+
+    def _should_cancel(self, job_id: str) -> bool:
+        return job_id in self._cancelled
 
     def wait(self, job_id: str, timeout: float = 30.0) -> IngestJob | None:
         """Block until a job finishes (tests and scripts)."""
@@ -199,6 +209,8 @@ class IngestionManager:
                 job.chunks_indexed = report.chunks_indexed
                 job.chunks_flagged = report.chunks_flagged
                 job.chunks_quarantined = report.chunks_quarantined
+                snapshot = job.model_copy()
+            self._publish(snapshot)
 
         try:
             report = self.kb.ingest_stream(
@@ -210,7 +222,7 @@ class IngestionManager:
                 filename=job.filename,
                 size_bytes=job.size_bytes,
                 progress=progress,
-                should_cancel=lambda: job_id in self._cancelled,
+                should_cancel=lambda: self._should_cancel(job_id),
             )
             self.kb.save()
             with self._lock:
@@ -233,6 +245,8 @@ class IngestionManager:
             with self._lock:
                 job.finished_at = _now()
                 self._cancelled.discard(job_id)
+                snapshot = job.model_copy()
+            self._publish(snapshot)
             if delete_after:
                 path.unlink(missing_ok=True)
 
@@ -240,8 +254,12 @@ class IngestionManager:
 @lru_cache
 def get_ingestion_manager() -> IngestionManager:
     settings = get_settings()
-    return IngestionManager(
-        get_knowledge_base(),
-        inbox_dir=settings.data_path("inbox"),
-        upload_dir=settings.data_path("uploads"),
-    )
+    kwargs = {
+        "inbox_dir": settings.data_path("inbox"),
+        "upload_dir": settings.data_path("uploads"),
+    }
+    if settings.use_postgres:
+        from app.persistence.jobs import PostgresIngestionManager
+
+        return PostgresIngestionManager(get_knowledge_base(), **kwargs)
+    return IngestionManager(get_knowledge_base(), **kwargs)

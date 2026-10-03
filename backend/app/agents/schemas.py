@@ -93,7 +93,17 @@ class CreateSessionRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=8000)
+    message: str = Field(min_length=1, max_length=8000, pattern=r"\S")
+    request_id: uuid.UUID = Field(default_factory=uuid.uuid4)
+
+
+class RunProgress(BaseModel):
+    request_id: str
+    status: Literal["running", "completed", "blocked", "failed"] = "running"
+    current_stage: str | None = None
+    stages: list[TraceEntry] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
 
 
 class AgentInfo(BaseModel):

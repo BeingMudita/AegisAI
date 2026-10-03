@@ -84,6 +84,7 @@ export default function FirewallLab() {
         <Card title="Scan text" subtitle="Every scan is recorded in the audit log">
           <div className="space-y-3">
             <textarea
+              aria-label="Text to scan"
               className={`${inputClass} min-h-28 font-mono`}
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -91,6 +92,7 @@ export default function FirewallLab() {
             />
             <div className="flex flex-wrap items-center gap-2">
               <select
+                aria-label="Content channel"
                 className={`${inputClass} w-auto`}
                 value={channel}
                 onChange={(e) => setChannel(e.target.value as Channel)}
@@ -113,6 +115,7 @@ export default function FirewallLab() {
             {PRESETS.map((p) => (
               <button
                 key={p.label}
+                disabled={busy}
                 onClick={() => {
                   setText(p.text);
                   setChannel(p.channel);

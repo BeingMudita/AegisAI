@@ -1,132 +1,53 @@
-import { Database, KeyRound, ShieldCheck, Workflow } from "lucide-react";
+import { ArrowRight, Database, KeyRound, ShieldCheck, Workflow } from "lucide-react";
 import { useState, type FormEvent } from "react";
-
 import { useAuth } from "../auth";
 import { Logo } from "../components/Logo";
 import { Button, ErrorNote, inputClass } from "../components/ui";
 
-const DEV_ACCOUNTS = [
-  ["admin", "admin123", "Full control"],
-  ["analyst", "analyst123", "Security analyst (read-only)"],
-  ["agent", "agent123", "Agent identity"],
-];
-
-const FEATURES = [
-  { icon: ShieldCheck, title: "Prompt-injection firewall", text: "Screens user input, documents and tool output." },
-  { icon: Workflow, title: "Zero-trust tool gateway", text: "Every tool call passes policy, domain and trust checks." },
-  { icon: Database, title: "Guarded RAG", text: "Poisoned documents are quarantined before agents see them." },
-];
+const DEV_ACCOUNTS = [["admin", "admin123", "Administrator"], ["analyst", "analyst123", "Security analyst"], ["agent", "agent123", "Agent operator"]];
 
 export default function Login() {
   const { login } = useAuth();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await login(username, password);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
-    } finally {
-      setBusy(false);
-    }
+    if (busy) return;
+    setBusy(true); setError(null);
+    try { await login(username, password); }
+    catch (err) { setError(err instanceof Error ? err.message : "Sign-in failed. Please try again."); }
+    finally { setBusy(false); }
   }
-
-  return (
-    <div className="grid min-h-screen lg:grid-cols-2">
-      <div className="relative hidden flex-col justify-between overflow-hidden bg-nav p-12 text-white lg:flex">
-        <div
-          className="pointer-events-none absolute -top-40 -right-40 h-[480px] w-[480px] rounded-full opacity-30 blur-3xl"
-          style={{ background: "var(--brand)" }}
-        />
-        <div className="relative flex items-center gap-3">
-          <Logo className="h-10 w-10" />
-          <span className="text-xl font-semibold">AegisAI</span>
-        </div>
-        <div className="relative space-y-8">
-          <h1 className="max-w-md text-4xl leading-tight font-semibold tracking-tight">
-            A zero-trust security layer for autonomous AI agents.
-          </h1>
-          <ul className="space-y-5">
-            {FEATURES.map((f) => (
-              <li key={f.title} className="flex gap-4">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
-                  <f.icon className="h-5 w-5" />
-                </span>
-                <div>
-                  <div className="font-medium">{f.title}</div>
-                  <div className="text-sm text-nav-ink-2">{f.text}</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="relative text-xs text-nav-ink-2">Local development build</div>
+  return <div className="auth-shell">
+    <section className="auth-story">
+      <div className="flex items-center gap-3"><Logo className="h-9 w-9" /><span className="text-xl font-semibold tracking-tight">AegisAI</span><span className="ml-auto text-[10px] tracking-widest text-white/60">SECURITY WORKSPACE</span></div>
+      <div>
+        <h1>More capable agents.<br />Clearer boundaries.</h1>
+        <p>A practical workspace to connect your knowledge, govern agent actions, and understand every security decision.</p>
+        <ul className="auth-features">
+          <li><Database className="h-5 w-5" /><span>Give agents knowledge you can trace.</span></li>
+          <li><Workflow className="h-5 w-5" /><span>Control tools with policy and trust.</span></li>
+          <li><ShieldCheck className="h-5 w-5" /><span>Follow every request from input to evidence.</span></li>
+        </ul>
       </div>
-
-      <div className="flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-sm">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <Logo className="h-10 w-10" />
-            <span className="text-xl font-semibold">AegisAI</span>
-          </div>
-          <h2 className="text-2xl font-semibold tracking-tight">Sign in</h2>
-          <p className="mt-1 mb-6 text-sm text-ink-2">Use one of the development accounts below.</p>
-          <form onSubmit={submit} className="space-y-4">
-            <label className="block text-sm">
-              <span className="mb-1.5 block font-medium text-ink-2">Username</span>
-              <input
-                className={inputClass}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1.5 block font-medium text-ink-2">Password</span>
-              <input
-                className={inputClass}
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
-            <ErrorNote message={error} />
-            <Button type="submit" disabled={busy || !username || !password} className="w-full py-2.5">
-              {busy ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
-          <div className="mt-6 rounded-xl border border-edge bg-surface p-4 shadow-card">
-            <p className="mb-3 flex items-center gap-2 text-sm font-medium text-ink">
-              <KeyRound className="h-4 w-4 text-muted" /> Development accounts
-            </p>
-            <div className="space-y-1.5">
-              {DEV_ACCOUNTS.map(([u, p, desc]) => (
-                <button
-                  key={u}
-                  type="button"
-                  className="flex w-full items-center justify-between rounded-lg border border-edge px-3 py-2 text-left text-sm hover:bg-surface-2"
-                  onClick={() => {
-                    setUsername(u);
-                    setPassword(p);
-                  }}
-                >
-                  <span className="font-mono text-ink">
-                    {u} / {p}
-                  </span>
-                  <span className="text-xs text-muted">{desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+      <footer className="text-[11px] text-white/60">BUILT AROUND ONE PRINCIPLE: VERIFY BEFORE YOU ACT.</footer>
+    </section>
+    <section className="auth-form" aria-label="Sign in">
+      <div>
+        <span className="eyebrow">Welcome to your workspace</span>
+        <h2 className="mt-3 text-3xl font-semibold tracking-tight">Sign in to AegisAI</h2>
+        <p className="mt-3 mb-8 text-sm leading-relaxed text-ink-2">Use your organization’s credentials to continue.</p>
+        <form onSubmit={submit} className="space-y-5">
+          <label className="block text-sm"><span className="mb-2 block font-medium">Username</span><input className={inputClass} value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required disabled={busy} placeholder="Enter your username" /></label>
+          <label className="block text-sm"><span className="mb-2 block font-medium">Password</span><input className={inputClass} type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required disabled={busy} placeholder="Enter your password" /></label>
+          <ErrorNote message={error} />
+          <Button type="submit" disabled={busy || !username || !password} className="w-full py-3">{busy ? "Signing in…" : "Continue to workspace"}<ArrowRight className="ml-auto h-4 w-4" /></Button>
+        </form>
+        <p className="mt-5 text-xs leading-relaxed text-ink-2">Need access? Contact the administrator responsible for your deployment.</p>
+        {import.meta.env.DEV && <details className="mt-10 rounded-lg border border-edge p-4"><summary className="flex items-center gap-2 text-xs font-medium"><KeyRound className="h-4 w-4" /> Local development accounts</summary><p className="mt-3 text-xs text-ink-2">Only shown by the development server. Select an account to fill the form.</p><div className="mt-3 space-y-2">{DEV_ACCOUNTS.map(([u, p, desc]) => <button disabled={busy} key={u} type="button" onClick={() => { setUsername(u); setPassword(p); }} className="flex w-full justify-between gap-3 rounded border border-edge px-3 py-2 text-xs hover:bg-surface-2"><span>{desc}</span><code>{u}</code></button>)}</div></details>}
       </div>
-    </div>
-  );
+    </section>
+  </div>;
 }

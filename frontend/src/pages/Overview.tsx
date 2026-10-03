@@ -1,256 +1,62 @@
-import {
-  Activity,
-  BarChart3,
-  Bot,
-  Database,
-  Gauge,
-  ScanSearch,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldX,
-  Siren,
-  Workflow,
-} from "lucide-react";
-
+import { ArrowRight, Bot, Database, Network, ShieldCheck, ShieldX, Activity, RefreshCw } from "lucide-react";
+import { isStaff, useAuth } from "../auth";
 import { ChartCard, DecisionChart, HBarChart } from "../components/charts";
-import { PipelineFlow, type Stage } from "../components/pipeline";
-import {
-  Badge,
-  Card,
-  Empty,
-  ErrorNote,
-  Meter,
-  PageHeader,
-  StatTile,
-  formatNumber,
-  severityTone,
-  toneVar,
-  trustTone,
-} from "../components/ui";
+import { Badge, Button, Card, Empty, ErrorNote, Meter, PageHeader, StatTile, severityTone, trustTone } from "../components/ui";
 import { formatTime, useApi } from "../hooks";
 import type { AgentInfo, KbStats, SecurityEvent, TelemetrySummary } from "../types";
 
-const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] as const;
-const pretty = (s: string) =>
-  s
-    .replace(/_/g, " ")
-    .toLowerCase()
-    .replace(/^\w/, (c) => c.toUpperCase());
-const CHART_HEIGHT = 240;
-
 export default function Overview() {
-  const summary = useApi<TelemetrySummary>("/api/security-events/summary", 3000);
-  const agents = useApi<AgentInfo[]>("/api/agents", 3000);
+  const { user } = useAuth();
+  const staff = isStaff(user);
+  const summary = useApi<TelemetrySummary>(staff ? "/api/security-events/summary" : null, 5000);
+  const agents = useApi<AgentInfo[]>("/api/agents", 5000);
   const kb = useApi<KbStats>("/api/retrieval", 10000);
-  const recent = useApi<{ events: SecurityEvent[] }>("/api/security-events?limit=7", 3000);
-  const trust = useApi<{ threshold: number }>("/api/trust");
-
-  const s = summary.data;
-  const decisions = s?.decisions ?? [];
-  const d = (component: string) => decisions.find((x) => x.component === component) ?? { allowed: 0, denied: 0 };
-  const byType = Object.entries(s?.by_type ?? {})
-    .map(([label, value]) => ({ label: pretty(label), value }))
-    .sort((a, b) => b.value - a.value);
-  const bySeverity = SEVERITIES.map((sev) => ({ label: pretty(sev), value: s?.by_severity[sev] ?? 0, sev }));
-  const threshold = trust.data?.threshold ?? 0.6;
-  const agentTrust = (agents.data ?? []).map((a) => ({ label: a.name, value: a.trust_score }));
-
-  const stage = (id: string, label: string, icon: Stage["icon"], component: string, what: string): Stage => {
-    const x = d(component);
-    return {
-      id,
-      label,
-      icon,
-      tone: x.denied ? "warning" : "accent",
-      value: `${formatNumber(x.allowed + x.denied)} checks`,
-      detail: (
-        <>
-          {what}
-          <br />
-          <span className="tabular">
-            {formatNumber(x.allowed)} passed ·{" "}
-            <span style={x.denied ? { color: "var(--critical)" } : undefined}>{formatNumber(x.denied)} stopped</span>
-          </span>
-        </>
-      ),
-    };
-  };
-
-  const stages: Stage[] = [
-    stage("ingest", "Data ingestion", Database, "ingestion", "documents screened chunk by chunk"),
-    stage("firewall", "Injection firewall", ShieldCheck, "firewall", "input, retrieved text & tool output"),
-    stage("rag", "Guarded retrieval", ScanSearch, "rag", "untrusted sources filtered"),
-    stage("policy", "Policy check", Workflow, "policy", "allowed tools & domains"),
-    stage("trust", "Trust check", Gauge, "trust", "agent trust ≥ tool's bar"),
-    stage("tools", "Tool gateway", Bot, "tools", "final allow / deny"),
+  const recent = useApi<{ events: SecurityEvent[] }>(staff ? "/api/security-events?limit=5" : null, 5000);
+  const data = summary.data;
+  const error = agents.error ?? kb.error ?? summary.error ?? recent.error;
+  const decisions = data?.decisions ?? [];
+  const eventTypes = Object.entries(data?.by_type ?? {}).map(([label, value]) => ({ label: label.replaceAll("_", " ").toLowerCase(), value }));
+  const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"].map(label => ({ label: label.toLowerCase(), value: data?.by_severity[label] ?? 0 }));
+  const standings = (agents.data ?? []).map(a => ({ label: a.name, value: a.trust_score }));
+  const steps = [
+    { n: "01", title: "Prepare your knowledge", text: "Add documents, review source trust, and inspect quarantined content.", route: "knowledge", link: "Open knowledge base", icon: Database },
+    { n: "02", title: "Run a guarded request", text: "Ask an agent a question and follow each security check as it runs.", route: "console", link: "Open agent workspace", icon: Bot },
+    { n: "03", title: staff ? "Review the evidence" : "Test your defenses", text: staff ? "Investigate decisions, denied actions, and changes in agent trust." : "Inspect how the firewall handles ordinary text and injection attempts.", route: staff ? "events" : "firewall", link: staff ? "View security events" : "Open firewall lab", icon: ShieldCheck },
   ];
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Security overview"
-        description="Everything an agent receives or does passes through these checkpoints. Counts update live — try an attack in the Agent console or upload a document in Data & RAG and watch them move."
-      />
-      <ErrorNote message={summary.error} />
-
-      <Card
-        title="How every request is protected"
-        subtitle="Live counts per checkpoint since the server started"
-        icon={Workflow}
-      >
-        <PipelineFlow stages={stages} />
-      </Card>
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatTile
-          icon={Siren}
-          tone="serious"
-          label="Security events"
-          value={formatNumber(s?.total_events ?? 0)}
-          note="incidents recorded"
-        />
-        <StatTile
-          icon={ShieldX}
-          tone="critical"
-          label="Injection detections"
-          value={formatNumber(s?.by_type.PROMPT_INJECTION ?? 0)}
-          note="flagged or blocked text"
-        />
-        <StatTile
-          icon={ShieldAlert}
-          tone="warning"
-          label="Policy violations"
-          value={formatNumber(s?.by_type.POLICY_VIOLATION ?? 0)}
-          note="forbidden tools / domains"
-        />
-        <StatTile
-          icon={Database}
-          tone="accent"
-          label="Quarantined chunks"
-          value={formatNumber(kb.data?.chunks_quarantined ?? 0)}
-          note={kb.data ? `${formatNumber(kb.data.chunks_indexed)} chunks indexed` : undefined}
-        />
-      </div>
-
-      <div className="grid items-stretch gap-6 lg:grid-cols-2">
-        <ChartCard
-          title="Decisions by checkpoint"
-          subtitle="Allowed vs denied at each security layer"
-          icon={BarChart3}
-          table={{
-            columns: ["Checkpoint", "Allowed", "Denied"],
-            rows: decisions.map((x) => [x.component, x.allowed, x.denied]),
-          }}
-        >
-          {decisions.length ? (
-            <DecisionChart data={decisions} height={CHART_HEIGHT} />
-          ) : (
-            <Empty icon={BarChart3}>No decisions yet — try the agent console.</Empty>
-          )}
-        </ChartCard>
-
-        <ChartCard
-          title="Events by severity"
-          subtitle="How serious the recorded incidents are"
-          icon={Siren}
-          table={{ columns: ["Severity", "Count"], rows: bySeverity.map((x) => [x.label, x.value]) }}
-        >
-          {s?.total_events ? (
-            <HBarChart
-              data={bySeverity}
-              colors={bySeverity.map((x) => toneVar(severityTone(x.sev)))}
-              labelWidth={80}
-              height={CHART_HEIGHT}
-            />
-          ) : (
-            <Empty icon={Siren}>No security events recorded.</Empty>
-          )}
-        </ChartCard>
-
-        <ChartCard
-          title="Events by type"
-          subtitle="What kind of attacks and violations were seen"
-          icon={Activity}
-          table={{ columns: ["Type", "Count"], rows: byType.map((x) => [x.label, x.value]) }}
-        >
-          {byType.length ? (
-            <HBarChart data={byType} labelWidth={140} height={CHART_HEIGHT} />
-          ) : (
-            <Empty icon={Activity}>No security events recorded.</Empty>
-          )}
-        </ChartCard>
-
-        <ChartCard
-          title="Agent trust"
-          subtitle={`Attacks lower it · line = ${threshold.toFixed(2)} threshold`}
-          icon={Gauge}
-          table={{
-            columns: ["Agent", "Trust", "Level"],
-            rows: (agents.data ?? []).map((a) => [a.name, a.trust_score.toFixed(2), a.trust_level]),
-          }}
-        >
-          {agentTrust.length ? (
-            <HBarChart
-              data={agentTrust}
-              domain={[0, 1]}
-              format={(v) => v.toFixed(2)}
-              reference={{ at: threshold, label: "threshold" }}
-              labelWidth={110}
-              height={CHART_HEIGHT}
-            />
-          ) : (
-            <Empty icon={Gauge}>No agents.</Empty>
-          )}
-        </ChartCard>
-      </div>
-
-      <div className="grid items-stretch gap-6 lg:grid-cols-3">
-        <Card
-          title="Latest events"
-          subtitle="Newest first — full log in Security events"
-          icon={Siren}
-          className="lg:col-span-2"
-        >
-          {recent.data?.events.length ? (
-            <ul className="-my-2 divide-y divide-edge">
-              {recent.data.events.map((e) => (
-                <li key={e.id} className="flex items-start gap-3 py-2.5 text-sm">
-                  <span className="tabular w-20 shrink-0 pt-0.5 text-xs text-muted">{formatTime(e.created_at)}</span>
-                  <span className="w-20 shrink-0">
-                    <Badge tone={severityTone(e.severity)}>{e.severity.toLowerCase()}</Badge>
-                  </span>
-                  <span className="min-w-0 flex-1 text-ink">{e.description}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <Empty icon={ShieldCheck}>Nothing yet — all quiet.</Empty>
-          )}
-        </Card>
-        <Card title="Agents" subtitle="Current standing" icon={Bot}>
-          <ul className="space-y-4">
-            {(agents.data ?? []).map((a) => (
-              <li key={a.name}>
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">{a.name}</span>
-                  <Badge tone={trustTone(a.trust_level)}>{a.trust_level.toLowerCase()}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Meter
-                    value={a.trust_score}
-                    markers={[{ at: threshold, label: `threshold ${threshold}` }]}
-                    label={`${a.name} trust`}
-                  />
-                  <span className="tabular w-9 text-right text-xs text-ink-2">{a.trust_score.toFixed(2)}</span>
-                </div>
-                <div className="mt-1.5 text-xs text-muted">
-                  {a.allowed_tools.length} tools allowed · {a.allowed_domains.join(", ") || "no web access"}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
+  return <div className="space-y-6">
+    <PageHeader title="Workspace overview" description="Your control center for safer agent operations." actions={<Button variant="ghost" size="sm" onClick={() => { void agents.reload(); void kb.reload(); void summary.reload(); void recent.reload(); }}><RefreshCw className="h-3.5 w-3.5" /> Refresh</Button>} />
+    <ErrorNote message={error ? `${error} Displayed values may be out of date. Refresh to reconnect.` : null} />
+    <section className="workspace-intro">
+      <div><span className="eyebrow">AEGIS / SECURITY WORKSPACE</span><h2>Give agents context.<br />Keep control of their actions.</h2><p>Bring in your knowledge, run a request, and inspect the evidence behind every decision.</p><a className="primary-link" href="#/console">Start a guarded request <ArrowRight className="h-4 w-4" /></a></div>
+      <div className="intro-note"><ShieldCheck className="h-7 w-7" /><strong>Trust is checked.<br />Never assumed.</strong><p>Input screening → guarded retrieval → policy and trust → protected output</p><a href="#/architecture">Explore the system <ArrowRight className="h-4 w-4" /></a></div>
+    </section>
+    <div className="grid gap-4 md:grid-cols-3">{steps.map(step => <a key={step.n} href={`#/${step.route}`} className="workflow-card"><div className="flex items-center justify-between"><span className="eyebrow">STEP {step.n}</span><step.icon className="h-5 w-5 text-accent" /></div><h3>{step.title}</h3><p>{step.text}</p><span className="action-link">{step.link} <ArrowRight className="h-4 w-4" /></span></a>)}</div>
+    <div className="flex flex-wrap items-center justify-between gap-2 pt-3"><h2 className="text-base font-semibold">Operational snapshot</h2><span className="text-xs text-ink-2">{error ? "Connection needs attention" : agents.loading ? "Connecting…" : "Auto-refresh enabled"} · counts since server start</span></div>
+    <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <StatTile label="Available agents" value={agents.data?.length ?? "—"} note="Governed by individual policies" icon={Bot} />
+      <StatTile label="Indexed chunks" value={kb.data?.chunks_indexed.toLocaleString() ?? "—"} note={kb.data ? `${kb.data.documents} documents in knowledge base` : "Waiting for knowledge base"} icon={Database} />
+      <StatTile label="Quarantined chunks" value={kb.data?.chunks_quarantined.toLocaleString() ?? "—"} note="Withheld from retrieval" icon={ShieldX} tone="warning" />
+      <StatTile label={staff ? "Security events" : "Flagged chunks"} value={staff ? data?.total_events.toLocaleString() ?? "—" : kb.data?.chunks_flagged ?? "—"} note={staff ? "Investigate in the event log" : "Sanitized during ingestion"} icon={Activity} tone="serious" />
     </div>
-  );
+    <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+      {staff ? <ChartCard title="Security decisions" subtitle="Allowed and denied at each checkpoint" table={{ columns: ["Checkpoint", "Allowed", "Denied"], rows: decisions.map(d => [d.component, d.allowed, d.denied]) }}>{decisions.length ? <DecisionChart data={decisions} height={245} /> : <Empty icon={ShieldCheck}>{summary.loading ? "Loading decisions…" : summary.error ? "Decision data is unavailable." : "Run a request to see security decisions here."}</Empty>}</ChartCard> : <Card title="Understand the security boundaries" icon={Network}><p className="text-sm leading-relaxed text-ink-2">Explore the interactive system map to see how documents, agent decisions, and tools are connected. Each component includes its responsibility and current implementation limits.</p><a className="action-link mt-6" href="#/architecture">Open architecture <ArrowRight className="h-4 w-4" /></a></Card>}
+      <Card title="Agent readiness" subtitle="Trust controls which capabilities an agent can use" actions={staff ? <a className="action-link" href="#/trust">Manage trust <ArrowRight className="h-3 w-3" /></a> : undefined}>
+        <ul className="divide-y divide-edge">{agents.data?.map(a => <li key={a.name} className="py-4 first:pt-0"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">{a.name}</strong><Badge tone={trustTone(a.trust_level)}>{a.trust_score.toFixed(2)} · {a.trust_level.toLowerCase()}</Badge></div><Meter value={a.trust_score} label={`${a.name} trust`} /><p className="mt-2 text-xs text-ink-2">{a.allowed_tools.length} allowed tools · {a.allowed_domains.length} approved domains</p></li>)}</ul>
+        {!agents.data && <Empty>{agents.error ? "Agent status unavailable." : "Loading agents…"}</Empty>}
+        <p className="border-t border-edge pt-3 text-xs leading-relaxed text-ink-2">Tool requirements vary. An agent may answer questions while higher-risk actions remain restricted.</p>
+      </Card>
+    </div>
+    {staff && <Card title="Recent security events" subtitle="Use the event log to inspect context and export evidence" actions={<a className="action-link" href="#/events">View all events <ArrowRight className="h-4 w-4" /></a>}>
+      {recent.data?.events.length ? <ul className="divide-y divide-edge">{recent.data.events.map(e => <li key={e.id} className="flex flex-wrap items-start gap-3 py-3 text-sm"><span className="w-20 text-xs text-ink-2">{formatTime(e.created_at)}</span><Badge tone={severityTone(e.severity)}>{e.severity.toLowerCase()}</Badge><span className="min-w-[160px] flex-1">{e.description}</span></li>)}</ul> : <Empty icon={ShieldCheck}>{recent.loading ? "Loading events…" : recent.error ? "Event data is unavailable." : "No incidents recorded. Your next guarded request will appear in the decision counts."}</Empty>}
+    </Card>}
+    {staff && <details className="rounded-xl border border-edge bg-surface p-5">
+      <summary className="text-sm font-semibold">Detailed analytics · event types, severity, and trust</summary>
+      <div className="mt-5 grid gap-4 xl:grid-cols-3">
+        <ChartCard title="Events by type" table={{columns:["Type", "Count"], rows:eventTypes.map(x => [x.label, x.value])}}>{eventTypes.length ? <HBarChart data={eventTypes} labelWidth={130} height={240} /> : <Empty>No event types recorded.</Empty>}</ChartCard>
+        <ChartCard title="Events by severity" table={{columns:["Severity", "Count"], rows:severities.map(x => [x.label, x.value])}}><HBarChart data={severities} labelWidth={70} height={240} /></ChartCard>
+        <ChartCard title="Agent trust" table={{columns:["Agent", "Trust"], rows:standings.map(x => [x.label, x.value.toFixed(2)])}}><HBarChart data={standings} domain={[0, 1]} format={v => v.toFixed(2)} labelWidth={100} height={240} /></ChartCard>
+      </div>
+    </details>}
+    <div className="deployment-note"><span className="eyebrow">Deployment context</span><p>Tools run in a sandbox. Sessions, trust, and events are held in memory; the document index can persist on disk. <a href="#/architecture">See implementation details →</a></p></div>
+  </div>;
 }

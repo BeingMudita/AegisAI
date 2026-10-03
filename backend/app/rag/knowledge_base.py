@@ -75,6 +75,7 @@ class KnowledgeBase:
         top_k: int = 5,
         batch_size: int = 256,
         persist_dir: Path | None = None,
+        store: InMemoryVectorStore | None = None,
     ) -> None:
         self.embedder = embedder
         self.firewall = firewall
@@ -85,7 +86,7 @@ class KnowledgeBase:
         self.top_k = top_k
         self.batch_size = batch_size
         self.persist_dir = persist_dir
-        self.store = InMemoryVectorStore(embedder.dim)
+        self.store = store if store is not None else InMemoryVectorStore(embedder.dim)
         self._documents: dict[str, IngestReport] = {}
         self._source_levels: dict[str, TrustLevel] = {}
         self._quarantine: list[QuarantinedChunk] = []
@@ -140,6 +141,7 @@ class KnowledgeBase:
             filename=filename,
             size_bytes=size_bytes,
         )
+        self._begin_document(report)
         position = {"bytes": 0}
 
         def texts() -> Iterator[str]:
@@ -167,8 +169,7 @@ class KnowledgeBase:
             self._rollback(document_id)
             raise
 
-        with self._lock:
-            self._documents[document_id] = report
+        self._complete_document(report)
         return report
 
     def _process_batch(
@@ -194,17 +195,19 @@ class KnowledgeBase:
                     TrustSignal.INJECTED_CONTENT,
                     rationale=f"Injection in '{report.title}' chunk {index}",
                 )
-                with self._lock:
-                    self._quarantine.append(
-                        QuarantinedChunk(
-                            chunk_id=chunk_id,
-                            document_title=report.title,
-                            source=report.source,
-                            score=verdict.score,
-                            categories=verdict.categories,
-                            excerpt=text[:200],
-                        )
-                    )
+                self._record_quarantine(
+                    report,
+                    index,
+                    text,
+                    QuarantinedChunk(
+                        chunk_id=chunk_id,
+                        document_title=report.title,
+                        source=report.source,
+                        score=verdict.score,
+                        categories=verdict.categories,
+                        excerpt=text[:200],
+                    ),
+                )
                 continue
             allowed += 1
             if verdict.action == FirewallAction.FLAG:
@@ -241,6 +244,20 @@ class KnowledgeBase:
             notify(IngestStage.INDEXING)
             self.store.add(kept, vectors)
             report.chunks_indexed += len(kept)
+
+    # Storage hooks — overridden by the Postgres knowledge base.
+    def _begin_document(self, report: IngestReport) -> None:
+        """Called before the first chunk of a document is processed."""
+
+    def _record_quarantine(
+        self, report: IngestReport, index: int, text: str, chunk: QuarantinedChunk
+    ) -> None:
+        with self._lock:
+            self._quarantine.append(chunk)
+
+    def _complete_document(self, report: IngestReport) -> None:
+        with self._lock:
+            self._documents[report.document_id] = report
 
     def _rollback(self, document_id: str) -> None:
         self.store.remove_document(document_id)
@@ -367,6 +384,11 @@ class KnowledgeBase:
             tmp.write_text(json.dumps(meta), encoding="utf-8")
             os.replace(tmp, self.persist_dir / "meta.json")
 
+    def seed_if_empty(self) -> None:
+        """Load the saved index, or ingest the demo corpus if there is none."""
+        if not self.load():
+            seed_knowledge_base(self)
+
     def load(self) -> bool:
         """Load a saved index; False if none exists or it used another embedder."""
         if self.persist_dir is None or not (self.persist_dir / "meta.json").exists():
@@ -453,21 +475,32 @@ def seed_knowledge_base(kb: KnowledgeBase, seed_dir: Path = SEED_DIR) -> list[In
 def get_knowledge_base() -> KnowledgeBase:
     """Return the process-wide knowledge base.
 
-    Loads the saved index from ``data/index`` when persistence is on;
-    otherwise (or on first run) seeds the demo corpus.
+    In Postgres mode documents, chunks and embeddings live in pgvector tables.
+    Otherwise the saved index in ``data/index`` is loaded when persistence is on.
+    Either way the demo corpus is seeded the first time the store is empty.
     """
     settings = get_settings()
-    kb = KnowledgeBase(
-        embedder=get_embedder(),
-        firewall=get_firewall(),
-        trust=get_trust_engine(),
-        policy=get_global_config().rag,
-        chunk_size=settings.rag_chunk_size,
-        chunk_overlap=settings.rag_chunk_overlap,
-        top_k=settings.rag_top_k,
-        batch_size=settings.ingest_batch_size,
-        persist_dir=settings.data_path("index") if settings.rag_persist else None,
-    )
-    if not kb.load() and settings.rag_seed_corpus:
-        seed_knowledge_base(kb)
+    kwargs = {
+        "embedder": get_embedder(),
+        "firewall": get_firewall(),
+        "trust": get_trust_engine(),
+        "policy": get_global_config().rag,
+        "chunk_size": settings.rag_chunk_size,
+        "chunk_overlap": settings.rag_chunk_overlap,
+        "top_k": settings.rag_top_k,
+        "batch_size": settings.ingest_batch_size,
+    }
+    kb: KnowledgeBase
+    if settings.use_postgres:
+        from app.persistence.knowledge import PostgresKnowledgeBase
+
+        kb = PostgresKnowledgeBase(**kwargs)
+    else:
+        kb = KnowledgeBase(
+            **kwargs, persist_dir=settings.data_path("index") if settings.rag_persist else None
+        )
+    if settings.rag_seed_corpus:
+        kb.seed_if_empty()
+    elif not settings.use_postgres:
+        kb.load()
     return kb

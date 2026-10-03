@@ -5,7 +5,7 @@ Restricted to staff (ADMIN, SECURITY_ANALYST).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.dependencies import require_roles
 from app.auth.roles import STAFF_ROLES, Role
@@ -47,5 +47,11 @@ async def summary(
 
 @router.delete("", status_code=204)
 async def clear_events(user: User = Depends(require_roles(Role.ADMIN))) -> None:
-    """Clear the in-memory audit buffer (ADMIN only)."""
-    get_audit_log().clear()
+    """Clear the in-memory audit buffer (ADMIN only).
+
+    The durable (Postgres) audit log refuses: it is pruned only by retention.
+    """
+    try:
+        get_audit_log().clear()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

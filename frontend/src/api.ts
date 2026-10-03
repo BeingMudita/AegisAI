@@ -23,17 +23,26 @@ export function setUnauthorizedHandler(handler: () => void): void {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const requestToken = token;
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && typeof init.body === "string") headers.set("Content-Type", "application/json");
 
-  const resp = await fetch(`${BASE}${path}`, { ...init, headers });
-  if (resp.status === 401 && token) onUnauthorized();
+  let resp: Response;
+  try {
+    resp = await fetch(`${BASE}${path}`, { ...init, headers });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(0, "Cannot reach the API. Check your connection and that the backend is running.");
+  }
+  if (resp.status === 401 && requestToken && requestToken === token) onUnauthorized();
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
       const body = await resp.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      detail = typeof body.detail === "string" ? body.detail : Array.isArray(body.detail)
+        ? body.detail.map((item: { msg?: string }) => item.msg ?? "Invalid request").join("; ")
+        : "The server could not complete this request.";
     } catch {
       /* non-JSON error body */
     }
@@ -44,7 +53,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),

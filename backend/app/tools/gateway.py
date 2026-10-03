@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from app.config import get_settings
 from app.database.enums import (
     SecurityEventType,
     SecuritySeverity,
@@ -390,9 +391,12 @@ class ToolGateway:
             agent=result.agent,
             reason=result.decision_reason,
         )
+        self._store_request(result)
+        return result
+
+    def _store_request(self, result: ToolCallResult) -> None:
         with self._lock:
             self._log.append(result)
-        return result
 
 
 def _risk_severity(risk: ToolRiskLevel) -> SecuritySeverity:
@@ -406,7 +410,14 @@ def _risk_severity(risk: ToolRiskLevel) -> SecuritySeverity:
 
 @lru_cache
 def get_tool_gateway() -> ToolGateway:
-    """Return the process-wide tool gateway."""
-    return ToolGateway(
-        config=get_global_config(), firewall=get_firewall(), trust=get_trust_engine()
-    )
+    """Return the process-wide tool gateway (shared log and limits in Postgres mode)."""
+    kwargs = {
+        "config": get_global_config(),
+        "firewall": get_firewall(),
+        "trust": get_trust_engine(),
+    }
+    if get_settings().use_postgres:
+        from app.persistence.tools import PostgresToolGateway
+
+        return PostgresToolGateway(**kwargs)
+    return ToolGateway(**kwargs)

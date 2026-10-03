@@ -1,4 +1,5 @@
-"""Core identity & governance tables: users, agents, policies, agent_sessions."""
+"""Core identity & governance tables: users, agents, policies, agent sessions, their runs
+and turns."""
 
 from __future__ import annotations
 
@@ -6,7 +7,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -87,8 +98,53 @@ class AgentSession(Base):
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    ended_at: Mapped[datetime | None] = mapped_column(
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    agent: Mapped["Agent"] = relationship(back_populates="sessions")
+    user: Mapped["User | None"] = relationship()
+
+
+class SessionRun(Base):
+    """One attempt to run a turn in a session.
+
+    It is the session's execution lock (a row in ``running`` state whose lease has
+    not expired), the progress record every API worker can read, and the replay
+    guard: the unique (session_id, request_id) pair rejects a repeated request ID
+    on any worker, even after a failed attempt.
+    """
+
+    __tablename__ = "session_runs"
+    __table_args__ = (UniqueConstraint("session_id", "request_id", name="uq_session_runs_request"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_sessions.id", ondelete="CASCADE"), index=True
+    )
+    request_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
-    agent: Mapped["Agent"] = relationship(back_populates="sessions")
+
+class AgentTurnRow(Base):
+    """A completed agent turn (the full guarded result, kept as JSON evidence)."""
+
+    __tablename__ = "agent_turns"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_sessions.id", ondelete="CASCADE"), index=True
+    )
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
