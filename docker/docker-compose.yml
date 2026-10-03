@@ -2,6 +2,7 @@
 # AegisAI — local stack
 # Run from repo root:  docker compose -f docker/docker-compose.yml up --build
 #   dashboard → http://localhost:8080      API → http://localhost:8000/docs
+#   State (events, trust, sessions, knowledge base…) lives in the db volume.
 # Add a local LLM:     docker compose -f docker/docker-compose.yml --profile llm up --build
 #   then pull a model once: docker compose -f docker/docker-compose.yml exec ollama ollama pull llama3.1:8b
 # ===========================================================================
@@ -31,6 +32,8 @@ services:
     environment:
       POSTGRES_HOST: db
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@db:5432/${POSTGRES_DB:-aegisai}
+      STORAGE_BACKEND: postgres   # durable state; workers share it
+      WEB_CONCURRENCY: "2"
       OLLAMA_BASE_URL: http://ollama:11434
       CORS_ORIGINS: http://localhost:8080,http://localhost:5173
     ports:

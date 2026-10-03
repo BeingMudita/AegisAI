@@ -154,7 +154,8 @@ def run_firewall_benchmark(cases: list[dict[str, Any]] | None = None) -> dict[st
 def fresh_runtime() -> AgentRuntime:
     """An isolated runtime: new trust registry, knowledge base and gateway."""
     settings = get_settings()
-    get_audit_log().clear()
+    if not settings.use_postgres:  # keep the bounded buffer small; never wipe a durable log
+        get_audit_log().clear()
     trust = TrustEngine(default_threshold=settings.trust_threshold)
     firewall = _firewall()
     config = get_global_config()

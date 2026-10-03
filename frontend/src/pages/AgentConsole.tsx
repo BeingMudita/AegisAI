@@ -1,7 +1,9 @@
-import { Bot as BotIcon, Loader2, RotateCcw, ScrollText, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { Bot as BotIcon, Download, RotateCcw, ScrollText, Send, ShieldCheck, BookOpen } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { api } from "../api";
+import RunProcess from "../components/RunProcess";
+import { downloadJson } from "../download";
 import {
   Badge,
   Button,
@@ -16,7 +18,7 @@ import {
   trustTone,
 } from "../components/ui";
 import { useApi } from "../hooks";
-import type { AgentInfo, AgentTurn, SessionRecord, ToolCall } from "../types";
+import type { AgentInfo, AgentTurn, RunProgress, SessionRecord, SessionSummary, ToolCall } from "../types";
 
 const EXAMPLES: Record<string, { label: string; text: string; attack?: boolean }[]> = {
   FinanceAgent: [
@@ -155,40 +157,77 @@ export default function AgentConsole() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState("");
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const sessions = useApi<{ sessions: SessionSummary[] }>("/api/sessions");
+  const progress = useApi<RunProgress>(busy && session ? `/api/sessions/${session.id}/progress` : null, 400);
+  const liveProgress = progress.data?.request_id === requestId ? progress.data : null;
   const bottom = useRef<HTMLDivElement>(null);
 
   const current = agents.data?.find((a) => a.name === agent);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    bottom.current?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "nearest" });
   }, [session?.turns.length, busy]);
 
   async function newSession(name = agent) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     setError(null);
     try {
       setSession(await api.post<SessionRecord>("/api/sessions", { agent: name }));
+      setRequestId(null);
+      void sessions.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      inFlight.current = false;
     }
   }
 
-  async function send(text: string) {
-    if (!text.trim() || busy) return;
+  async function restoreSession(id: string) {
+    if (inFlight.current || !id) return;
+    inFlight.current = true;
     setBusy(true);
+    setError(null);
+    try {
+      const restored = await api.get<SessionRecord>(`/api/sessions/${id}`);
+      setAgent(restored.agent);
+      setSession(restored);
+      setRequestId(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); inFlight.current = false; }
+  }
+
+  async function send(text: string) {
+    if (!text.trim() || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setPending(text);
+    const id = crypto.randomUUID();
+    setRequestId(id);
     setError(null);
     try {
       let s = session;
       if (!s || s.agent !== agent || s.status !== "ACTIVE") {
         s = await api.post<SessionRecord>("/api/sessions", { agent });
       }
-      const turn = await api.post<AgentTurn>(`/api/sessions/${s.id}/messages`, { message: text });
+      setSession(s);
+      const turn = await api.post<AgentTurn>(`/api/sessions/${s.id}/messages`, { message: text, request_id: id });
       setSession({ ...s, turns: [...s.turns, turn] });
       setMessage("");
       void agents.reload();
+      void sessions.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(`${e instanceof Error ? e.message : String(e)} Your draft is preserved. Reload this conversation to check whether the server completed the request before sending again.`);
     } finally {
       setBusy(false);
+      setPending("");
+      inFlight.current = false;
     }
   }
 
@@ -200,9 +239,21 @@ export default function AgentConsole() {
   return (
     <div>
       <PageHeader
-        title="Agent console"
-        description="Chat with an AI agent. Every message runs through the full security pipeline — open the Security trace under a reply to see what each checkpoint decided."
+        title="Agent workspace"
+        description="Ask a question, follow the checks, and inspect the evidence. Tool actions run in a sandbox."
+        actions={<Button variant="ghost" size="sm" disabled={!session?.turns.length || busy} onClick={() => session && downloadJson(`aegis-session-${session.id}.json`, { exported_at: new Date().toISOString(), session })}><Download className="h-4 w-4" /> Export conversation & evidence</Button>}
       />
+      <ErrorNote message={agents.error ?? sessions.error} />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <label htmlFor="session-history" className="text-xs font-medium text-ink-2">Conversation history</label>
+        <select id="session-history" className={`${inputClass} max-w-sm`} disabled={busy} value={session?.id ?? ""} onChange={e => void restoreSession(e.target.value)}>
+          <option value="">Start a new conversation</option>
+          {session && !sessions.data?.sessions.some(s => s.id === session.id) && <option value={session.id}>{session.agent} · current conversation</option>}
+          {sessions.data?.sessions.map(s => <option key={s.id} value={s.id}>{s.agent} · {new Date(s.created_at).toLocaleString()} · {s.turns} turns · {s.status.toLowerCase()}</option>)}
+        </select>
+        {session && <Button variant="ghost" size="sm" disabled={busy} onClick={() => void restoreSession(session.id)}>Reload conversation</Button>}
+      </div>
+      <details open={busy} className="mb-4 rounded-lg border border-edge bg-surface p-3 lg:hidden"><summary className="text-sm font-medium">Execution monitor · {busy ? "request in progress" : "view processing steps"}</summary><div className="mt-3"><RunProcess busy={busy} progress={liveProgress} trace={session?.turns.at(-1)?.trace} failed={Boolean(error)} /></div></details>
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="flex h-[calc(100vh-15rem)] min-h-[520px] min-w-0 flex-col overflow-hidden rounded-2xl border border-edge bg-surface shadow-card">
           <div className="flex flex-wrap items-center gap-3 border-b border-edge px-5 py-3">
@@ -211,10 +262,13 @@ export default function AgentConsole() {
                 <button
                   key={a.name}
                   role="tab"
+                  disabled={busy}
                   aria-selected={a.name === agent}
                   onClick={() => {
                     setAgent(a.name);
                     setSession(null);
+                    setError(null);
+                    setRequestId(null);
                   }}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
                     a.name === agent ? "bg-accent text-white shadow-sm" : "text-ink-2 hover:text-ink"
@@ -229,7 +283,7 @@ export default function AgentConsole() {
                 trust {current.trust_score.toFixed(2)} · {current.trust_level.toLowerCase()}
               </Badge>
             )}
-            <Button variant="ghost" size="sm" onClick={() => void newSession()} className="ml-auto">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => void newSession()} className="ml-auto">
               <RotateCcw className="h-3.5 w-3.5" /> New chat
             </Button>
           </div>
@@ -237,18 +291,14 @@ export default function AgentConsole() {
           <div className="flex-1 space-y-6 overflow-y-auto bg-page/40 px-5 py-6">
             {!session?.turns.length && !busy && (
               <Empty icon={BotIcon}>
-                Send a message — or pick an example on the right — to see every security checkpoint the request passes
-                through.
+                <strong className="text-base font-medium text-ink">What would you like to investigate?</strong>
+                Ask about your documents or choose an example to get started.
               </Empty>
             )}
             {session?.turns.map((t) => (
               <Turn key={t.id} turn={t} />
             ))}
-            {busy && (
-              <div className="flex items-center gap-2 text-sm text-muted">
-                <Loader2 className="h-4 w-4 animate-spin" /> Running the guarded agent pipeline…
-              </div>
-            )}
+            {busy && <div className="rounded-lg border border-edge bg-surface-2 p-4 text-sm"><p className="mb-2 whitespace-pre-wrap">{pending}</p><span role="status" className="text-xs text-ink-2">Request in progress. Follow the execution monitor for server-reported updates.</span></div>}
             <div ref={bottom} />
           </div>
 
@@ -256,6 +306,8 @@ export default function AgentConsole() {
             <ErrorNote message={error} />
             <div className="flex gap-2">
               <input
+                aria-label={`Message ${agent}`}
+                disabled={busy}
                 className={inputClass}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
@@ -270,13 +322,15 @@ export default function AgentConsole() {
         </section>
 
         <div className="space-y-6">
-          <Card title="Try these" subtitle="Click to send — benign requests and attacks" icon={Sparkles}>
+          <div className="hidden lg:block"><RunProcess busy={busy} progress={liveProgress} trace={session?.turns.at(-1)?.trace} failed={Boolean(error)} /></div>
+          <ErrorNote message={busy ? progress.error : null} />
+          <Card title="Example requests" subtitle="Choose a draft, then send when ready" icon={BookOpen}>
             <div className="space-y-1.5">
               {(EXAMPLES[agent] ?? []).map((ex) => (
                 <button
                   key={ex.label}
                   disabled={busy}
-                  onClick={() => void send(ex.text)}
+                  onClick={() => setMessage(ex.text)}
                   title={ex.text}
                   className="flex w-full items-center justify-between gap-2 rounded-lg border border-edge px-3 py-2 text-left text-sm transition hover:border-accent/50 hover:bg-surface-2 disabled:opacity-50"
                 >

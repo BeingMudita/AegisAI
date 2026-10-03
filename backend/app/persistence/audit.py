@@ -1,0 +1,126 @@
+"""Durable audit log: ``security_events`` and ``decision_counters``."""
+
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert
+
+from app.database.enums import SecurityEventType, SecuritySeverity
+from app.database.models import DecisionCounter, SecurityEvent
+from app.database.sync import transaction
+from app.telemetry.schemas import DecisionCount, SecurityEventRecord, TelemetrySummary
+from app.telemetry.store import AuditLog
+
+
+class AuditClearForbidden(RuntimeError):
+    """The durable audit log is not erasable through the application."""
+
+
+def _to_record(row: SecurityEvent) -> SecurityEventRecord:
+    return SecurityEventRecord(
+        id=str(row.id),
+        event_type=row.event_type,
+        severity=row.severity,
+        agent=row.actor,
+        session_id=row.session_id,
+        source=row.source or "",
+        description=row.description or "",
+        details=row.details or {},
+        created_at=row.created_at,
+    )
+
+
+class PostgresAuditLog(AuditLog):
+    def __init__(self) -> None:
+        super().__init__(max_events=1)  # the in-memory buffer is unused
+
+    # ------------------------------------------------------------- writing
+    def _store_event(self, event: SecurityEventRecord) -> None:
+        with transaction() as db:
+            db.add(
+                SecurityEvent(
+                    id=uuid.UUID(event.id),
+                    event_type=event.event_type,
+                    severity=event.severity,
+                    actor=event.agent,
+                    session_id=event.session_id,
+                    source=event.source,
+                    description=event.description,
+                    details=event.details,
+                    created_at=event.created_at,
+                )
+            )
+
+    def count_decisions(self, component: str, *, allowed: int = 0, denied: int = 0) -> None:
+        if not allowed and not denied:
+            return
+        stmt = insert(DecisionCounter).values(component=component, allowed=allowed, denied=denied)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[DecisionCounter.component],
+            set_={
+                "allowed": DecisionCounter.allowed + allowed,
+                "denied": DecisionCounter.denied + denied,
+            },
+        )
+        with transaction() as db:
+            db.execute(stmt)
+
+    # ------------------------------------------------------------- reading
+    def list_events(
+        self,
+        *,
+        event_type: SecurityEventType | None = None,
+        severity: SecuritySeverity | None = None,
+        agent: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SecurityEventRecord]:
+        query = select(SecurityEvent)
+        if event_type is not None:
+            query = query.where(SecurityEvent.event_type == event_type)
+        if severity is not None:
+            query = query.where(SecurityEvent.severity == severity)
+        if agent is not None:
+            query = query.where(func.lower(SecurityEvent.actor) == agent.lower())
+        if session_id is not None:
+            query = query.where(SecurityEvent.session_id == session_id)
+        query = query.order_by(SecurityEvent.created_at.desc()).limit(limit)
+        with transaction() as db:
+            return [_to_record(row) for row in db.scalars(query)]
+
+    def summary(self) -> TelemetrySummary:
+        with transaction() as db:
+            total = db.scalar(select(func.count()).select_from(SecurityEvent)) or 0
+
+            def grouped(column):  # type: ignore[no-untyped-def]
+                return db.execute(select(column, func.count()).group_by(column)).all()
+
+            by_type = {k.value: n for k, n in grouped(SecurityEvent.event_type)}
+            by_severity = {k.value: n for k, n in grouped(SecurityEvent.severity)}
+            by_agent = {(k or "unknown"): n for k, n in grouped(SecurityEvent.actor)}
+            counters = db.scalars(select(DecisionCounter).order_by(DecisionCounter.component)).all()
+            decisions = [
+                DecisionCount(component=c.component, allowed=c.allowed, denied=c.denied)
+                for c in counters
+            ]
+        return TelemetrySummary(
+            total_events=total,
+            by_type=by_type,
+            by_severity=by_severity,
+            by_agent=by_agent,
+            decisions=decisions,
+        )
+
+    def clear(self) -> None:
+        raise AuditClearForbidden(
+            "The durable audit log can't be cleared through the application; "
+            "it is pruned by the retention policy."
+        )
+
+    def truncate_for_tests(self) -> None:
+        """Test-suite helper: wipe events and counters."""
+        with transaction() as db:
+            db.execute(delete(SecurityEvent))
+            db.execute(delete(DecisionCounter))

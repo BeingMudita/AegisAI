@@ -59,8 +59,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const { access_token } = await api.login(username, password);
     setToken(access_token);
-    writeStored(access_token);
-    setUser(await api.get<User>("/api/auth/me"));
+    try {
+      const profile = await api.get<User>("/api/auth/me");
+      writeStored(access_token);
+      setUser(profile);
+    } catch (error) {
+      setToken(null);
+      writeStored(null);
+      throw error;
+    }
   }, []);
 
   return <AuthContext.Provider value={{ user, ready, login, logout }}>{children}</AuthContext.Provider>;

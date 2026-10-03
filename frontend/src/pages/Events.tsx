@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Download } from "lucide-react";
+import { downloadJson } from "../download";
 
 import { api, qs } from "../api";
 import { useAuth } from "../auth";
@@ -34,6 +36,7 @@ export default function Events() {
       <PageHeader
         title="Security events"
         description="The audit log: every blocked injection, policy violation, trust drop and denied tool call, newest first. Click a row to see its details."
+        actions={<Button variant="ghost" size="sm" disabled={!events.data?.events.length || events.loading || Boolean(events.error)} onClick={() => downloadJson("aegis-security-events.json", { exported_at: new Date().toISOString(), filters: { event_type: eventType, severity, agent }, limit: 200, events: events.data?.events })}><Download className="h-4 w-4" /> Export filtered events</Button>}
       />
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -79,7 +82,7 @@ export default function Events() {
         )}
       </div>
       <ErrorNote message={events.error ?? error} />
-      <Card title={`${events.data?.count ?? 0} events`} subtitle="Newest first">
+      <Card title={events.loading ? "Loading events…" : `${events.data?.count ?? 0} events`} subtitle="Newest first · showing up to 200 matching events; export includes this view">
         {events.data?.events.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 from app.database.base import Base
-from app.database.models.core import Agent, AgentSession, Policy, User
+from app.database.models.core import (
+    Agent,
+    AgentSession,
+    AgentTurnRow,
+    Policy,
+    SessionRun,
+    User,
+)
 from app.database.models.documents import (
     Document,
     DocumentChunk,
     DocumentSource,
     Embedding,
+    IngestJobRow,
 )
 from app.database.models.security import (
+    DecisionCounter,
+    RateLimitHit,
     SecurityEvent,
     ToolDefinition,
     ToolRequest,
     TrustAssessment,
+    TrustScoreRow,
 )
 
 __all__ = [
@@ -23,11 +34,17 @@ __all__ = [
     "Agent",
     "Policy",
     "AgentSession",
+    "SessionRun",
+    "AgentTurnRow",
     "DocumentSource",
     "Document",
     "DocumentChunk",
     "Embedding",
+    "IngestJobRow",
     "TrustAssessment",
+    "TrustScoreRow",
+    "DecisionCounter",
+    "RateLimitHit",
     "ToolDefinition",
     "ToolRequest",
     "SecurityEvent",

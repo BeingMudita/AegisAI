@@ -570,7 +570,7 @@ export default function KnowledgeBase() {
   return (
     <div>
       <PageHeader
-        title="Data & RAG"
+        title="Knowledge base"
         description="Add documents to the agents' knowledge base and watch them move through the pipeline. Every chunk is scanned by the prompt-injection firewall before it can be indexed — poisoned paragraphs are quarantined, suspicious ones sanitized."
       />
 
