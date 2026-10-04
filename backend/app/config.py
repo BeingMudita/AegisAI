@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     firewall_flag_threshold: float = 0.4
     policy_config_path: str = "app/policies/default_policies.yaml"
 
+    # Red-team suites (firewall_cases.yaml, agent_scenarios.yaml); default: ../attack-scenarios
+    redteam_suites_dir: str | None = None
+
+    # Human approval: a queued high-risk tool call expires if nobody decides in time.
+    approval_ttl_minutes: int = 60
+
     # Telemetry
     audit_buffer_size: int = 5000
 

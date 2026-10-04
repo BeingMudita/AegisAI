@@ -316,7 +316,9 @@ class AgentRuntime:
         result = self.gateway.execute(
             state["agent"], action.tool, action.arguments, session_id=state["session_id"]
         )
-        status = {"EXECUTED": "executed", "DENIED": "denied"}.get(result.status.value, "failed")
+        status = {"EXECUTED": "executed", "DENIED": "denied", "PENDING": "pending"}.get(
+            result.status.value, "failed"
+        )
         failed_at = next((c.checkpoint for c in result.checks if not c.passed), None)
         return {
             "pending": None,

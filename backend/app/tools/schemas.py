@@ -47,10 +47,19 @@ class ToolCallResult(BaseModel):
     redactions: dict[str, int] = Field(default_factory=dict)
     requested_at: datetime = Field(default_factory=_now)
     decided_at: datetime | None = None
+    # Human approval (high-risk tools)
+    expires_at: datetime | None = None
+    reviewed_by: str | None = None
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
 
     @property
     def executed(self) -> bool:
         return self.status == ToolRequestStatus.EXECUTED
+
+    @property
+    def pending(self) -> bool:
+        return self.status == ToolRequestStatus.PENDING
 
 
 class ToolInfo(BaseModel):
@@ -63,3 +72,14 @@ class ToolInfo(BaseModel):
     data_category: str | None
     parameters: dict[str, str]
     domain_checked_argument: str | None
+    requires_approval: bool = False
+
+
+class ReviewRequest(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
+class ApprovalQueue(BaseModel):
+    pending: list[ToolCallResult]
+    recent: list[ToolCallResult]
+    ttl_minutes: int

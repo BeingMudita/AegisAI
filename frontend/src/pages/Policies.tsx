@@ -66,6 +66,7 @@ export default function Policies() {
                     <th className="border-b border-edge py-1.5 pr-3 font-semibold">Status</th>
                     <th className="border-b border-edge py-1.5 pr-3 font-semibold">Min trust</th>
                     <th className="border-b border-edge py-1.5 pr-3 font-semibold">Rate / min</th>
+                    <th className="border-b border-edge py-1.5 pr-3 font-semibold">Human approval</th>
                     <th className="border-b border-edge py-1.5 font-semibold">Description</th>
                   </tr>
                 </thead>
@@ -84,6 +85,9 @@ export default function Policies() {
                       </td>
                       <td className="tabular border-b border-edge py-1.5 pr-3 text-xs">
                         {t.rate_limit_per_min ?? "—"}
+                      </td>
+                      <td className="border-b border-edge py-1.5 pr-3">
+                        {t.requires_approval ? <Badge tone="warning">required</Badge> : <span className="text-xs text-muted">—</span>}
                       </td>
                       <td className="border-b border-edge py-1.5 text-xs text-ink-2">
                         {t.description}

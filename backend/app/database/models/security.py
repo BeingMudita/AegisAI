@@ -129,6 +129,11 @@ class ToolRequest(Base):
         DateTime(timezone=True), server_default=func.now(), index=True
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Human approval of high-impact tools
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SecurityEvent(Base):
@@ -163,3 +168,15 @@ class RateLimitHit(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(255), index=True)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class RedTeamRunRow(Base):
+    """A red-team lab run (the full report is kept as JSON)."""
+
+    __tablename__ = "redteam_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+

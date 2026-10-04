@@ -22,11 +22,19 @@ sending actual email or querying production records.
 4. **Exercise a boundary.** Send the supplied off-domain email example. Inspect
    the denied tool's checkpoint evidence. Attacks alter the shared agent's trust;
    use an isolated deployment for evaluation.
-5. **Investigate.** Staff can filter Security events and inspect details. Export
+5. **Decide on a high-impact action.** Send “Email the CFO”. The email passes
+   every automatic check and then waits in **Approvals**. Review the recipient
+   and body, add a note, and approve or reject. Approval re-runs every check, so
+   a request that has become unsafe since it was queued is still refused.
+6. **Investigate.** Staff can filter Security events and inspect details. Export
    the filtered view (up to 200 events) or a complete conversation as JSON.
    Conversation exports include original messages and retrieved context, so they
    are evidence files rather than universally sanitized reports.
-6. **Recover after an interruption.** Choose the conversation from history and
+7. **Measure the defenses.** In **Red-team lab**, run the attack suites. The run
+   uses an isolated sandbox, so live trust and events are untouched. Export the
+   run as JSON, then open **Threat coverage** to see which OWASP and MITRE ATLAS
+   threats the run verified and the residual risk of each.
+8. **Recover after an interruption.** Choose the conversation from history and
    reload it before repeating an uncertain request. Leaving the page does not
    cancel a server-side turn. An overlapping send or close returns 409. Reusing
    a request UUID also returns 409, including after a failed attempt.
@@ -34,8 +42,9 @@ sending actual email or querying production records.
 ## Access and accessibility
 
 All authenticated users have the guided overview, agent workspace, architecture,
-knowledge search, firewall lab, and their allowed policy views. Staff additionally
-have event/trust visibility. Existing backend ownership and role checks remain
+knowledge search, firewall lab, threat coverage, and their allowed policy views.
+Staff additionally have event/trust visibility, the approvals queue (admins decide)
+and the red-team lab. Existing backend ownership and role checks remain
 authoritative; hiding a navigation item is not an access control.
 
 The mobile menu traps keyboard focus, closes with Escape, and returns focus to its
@@ -75,7 +84,7 @@ inside its own region and the execution monitor is a disclosure above the chat.
    pagination for large deployments.
 3. Integrate organization identity (SSO/OIDC), tenant isolation, and per-principal
    abuse controls; evaluate the effect of untrusted callers on shared agent trust.
-4. Add carefully scoped real tool adapters and an explicit approval workflow for
-   high-impact actions. Keep the gateway as their only execution path.
+4. Add carefully scoped real tool adapters behind the existing approval workflow.
+   Keep the gateway as their only execution path.
 5. Extend the existing red-team evaluation with paraphrased attacks before adding
    a model-based classifier or making stronger detection claims.

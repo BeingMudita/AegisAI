@@ -21,6 +21,7 @@ from app.database.models.documents import (
 from app.database.models.security import (
     DecisionCounter,
     RateLimitHit,
+    RedTeamRunRow,
     SecurityEvent,
     ToolDefinition,
     ToolRequest,
@@ -45,6 +46,7 @@ __all__ = [
     "TrustScoreRow",
     "DecisionCounter",
     "RateLimitHit",
+    "RedTeamRunRow",
     "ToolDefinition",
     "ToolRequest",
     "SecurityEvent",

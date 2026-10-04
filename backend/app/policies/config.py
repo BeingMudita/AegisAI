@@ -27,6 +27,8 @@ class ToolPolicy(BaseModel):
     min_trust: float | None = Field(default=None, ge=0.0, le=1.0)
     rate_limit_per_min: int | None = Field(default=None, ge=1)
     data_category: str | None = None
+    # High-impact actions: after every automatic check passes, wait for a human.
+    requires_approval: bool = False
 
     @property
     def required_trust(self) -> float:

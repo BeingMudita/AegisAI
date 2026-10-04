@@ -1,6 +1,7 @@
 # AegisAI Architecture
 
-> Living document — expanded as phases are implemented.
+> Living document — expanded as phases are implemented. For adversaries, trust
+> boundaries and residual risk see the [threat model](threat-model.md).
 
 ## Overview
 
@@ -40,6 +41,8 @@ Checks run cheapest-first; the first failure denies the call.
 4. **firewall** — arguments scanned on the `TOOL_ARGUMENTS` channel
 5. **trust** — agent trust ≥ the tool's `min_trust` (else risk-level default, else `TRUST_THRESHOLD`)
 6. **rate_limit** — per agent and tool, sliding 60-second window
+7. **approval** — tools marked `requires_approval` stop here as `PENDING`
+   (see [Human approval](#human-approval)); everything else continues
 
 Then the tool runs (sandboxed simulations — no real shell, network or email),
 its **output** is scanned on the `TOOL_OUTPUT` channel (BLOCK withholds it and
@@ -50,14 +53,17 @@ sensitive for the agent. Every outcome is audited and moves the agent's trust.
 
 | Package | Role |
 |---------|------|
-| `app/api` | FastAPI routes: auth, firewall, agents, sessions, retrieval, trust, tools, policies, security-events |
+| `app/api` | FastAPI routes: auth, firewall, agents, sessions, retrieval, trust, tools, policies, security-events, approvals, redteam, compliance |
 | `app/firewall` | `normalize.py` (de-obfuscation), `rules.py` (weighted signatures), `scanner.py` (noisy-OR scoring, sanitize, audit), `dlp.py` |
 | `app/trust` | `scoring.py` (pure math), `engine.py` (registry, history, gating) |
 | `app/policies` | `engine.py` (per-agent decisions), `store.py` (agent policies), `config.py` (global registry & RAG rules) |
 | `app/agents` | `runtime.py` (LangGraph), `brain.py` (Ollama / rule-based), `sessions.py` |
 | `app/rag` | `chunking.py`, `embeddings.py`, `store.py`, `knowledge_base.py`, `seed/` demo corpus |
-| `app/tools` | `sandbox.py` (simulated tools), `gateway.py` |
-| `app/telemetry` | `store.py` (audit log), `logging.py` (structlog setup) |
+| `app/tools` | `sandbox.py` (simulated tools), `gateway.py` (checkpoints and the approval queue) |
+| `app/telemetry` | `store.py` (audit log, with a context-local override for isolated runs), `logging.py` (structlog setup) |
+| `app/redteam` | `runner.py` (firewall benchmark, agent scenarios in fresh runtimes), `service.py` (background runs, history) |
+| `app/compliance` | `catalog.py` (controls, OWASP LLM Top 10 2025, MITRE ATLAS), `service.py` (live evidence) |
+| `app/persistence` | PostgreSQL implementations of every store |
 | `app/database` | Models, sessions, migrations |
 
 ## Firewall scoring
@@ -92,7 +98,8 @@ chosen by `STORAGE_BACKEND`:
 | Audit log | bounded deque | `security_events`, `decision_counters` (atomic upserts); not erasable via the API |
 | Trust | dict + lock | `trust_scores` (row lock per update) + `trust_assessments` history |
 | Sessions | dict + lock | `agent_sessions`, `session_runs`, `agent_turns` |
-| Tool gateway log / limits | deque + per-process windows | `tool_requests` + `rate_limit_hits` |
+| Tool gateway log / limits / approvals | deque + per-process windows | `tool_requests` (incl. review columns) + `rate_limit_hits` |
+| Red-team runs | last 25 in memory | `redteam_runs` (JSON payload per run) |
 | Login throttle | per-process buckets | `rate_limit_hits` |
 | Users, policies | seeded in memory / JSON files | `users`, `agents`, `policies`, `tool_definitions` (seeded once) |
 | Knowledge base | in-memory index (+ optional disk save) | `document_sources` → `documents` → `document_chunks` → `embeddings` (pgvector, HNSW cosine index) |
@@ -130,6 +137,68 @@ python -m app.database.migrate --seed   # upgrade to head, then seed reference d
 The Docker image runs this before starting uvicorn when `STORAGE_BACKEND=postgres`.
 `tests/test_postgres.py::test_migrations_match_models` fails if the models and
 migrations ever drift apart.
+
+## Human approval
+
+A tool with `requires_approval: true` in `default_policies.yaml` (today: `send_email`)
+is never executed by the agent turn that asks for it. After all six automatic
+checks pass, the gateway records the request as `PENDING` with an expiry
+(`APPROVAL_TTL_MINUTES`, 60 by default) and the agent tells the user it is waiting.
+
+```
+PENDING ──approve──▶ APPROVED (claimed) ──re-check ok──▶ EXECUTED
+   │                                     └─re-check fails─▶ DENIED
+   ├──reject──▶ DENIED  (agent trust −, TOOL_DENIED event)
+   └──TTL────▶ DENIED  ("No decision before the approval request expired.")
+```
+
+- **Exactly once.** Approval first *claims* the request: a compare-and-set from
+  `PENDING` to `APPROVED` under a lock (memory) or one
+  `UPDATE … WHERE status = 'PENDING' RETURNING` (Postgres). A second approver, or
+  a second worker, gets 409 and the tool never runs twice.
+- **Re-checked at decision time.** The claimed request runs every checkpoint
+  again. If the agent's trust fell, its policy changed or the domain left the
+  allow-list since it was queued, the approval ends in `DENIED` with the failing
+  check recorded.
+- **Accountable.** `reviewed_by`, `review_note` and `reviewed_at` are stored on the
+  request and the decision is audited as a security event.
+- **Access.** `GET /api/approvals` is open to staff; approve and reject
+  (`POST /api/approvals/{id}/approve|reject`) are admin-only.
+
+## Red-team lab
+
+`POST /api/redteam/runs` (staff) starts a background run of the suites in
+`attack-scenarios/`: the 73-case firewall benchmark and the 21 agent scenarios.
+Only one run executes at a time (409 otherwise; a run still marked running after 15 minutes is
+treated as stale).
+
+Runs are sandboxed from live state:
+
+- `isolated_audit_log()` swaps the audit log for the duration of the run through a
+  `ContextVar`, so attack traffic never reaches Security events or the counters.
+- Each agent scenario builds a fresh trust engine, tool gateway and knowledge base.
+
+Progress is saved at most every 0.25 s. Finished runs (precision, recall, F1,
+per-family detection, confusion matrix, latency, every case and scenario) are kept
+in memory or in `redteam_runs`. `evaluation/run_eval.py` and the CI gate use the
+same runner.
+
+## Threat coverage
+
+`app/compliance/catalog.py` is a reviewed, code-maintained mapping of 16 controls to
+the OWASP Top 10 for LLM Applications 2025 and nine MITRE ATLAS techniques. Each
+threat has a status (mitigated / partial / gap), the controls that address it, the
+evidence that should prove it, and a residual-risk statement.
+
+`GET /api/compliance` resolves the evidence against the latest completed red-team run:
+
+- `category:` refs pass at ≥ 90% detection; below that they are *weak*.
+- `scenario:` refs pass when the scenario was defended.
+- `test:` refs point at CI tests.
+
+A threat is *verified* only when all of its run-based evidence passes. The catalog
+states the project's claims; the run checks them. `tests/test_compliance.py` keeps
+every reference valid.
 
 ## Policy engine
 
@@ -178,10 +247,9 @@ to prevent a previous run's progress from appearing as current. After completion
 the guarded turn's trace remains the primary evidence. Fast runs can finish between
 polls; the UI does not insert artificial delays or invent progress percentages.
 
-This coordination is process-local, consistent with the existing runtime stores.
-Use a single worker until shared storage, distributed locking, bounded retention,
-and shared replay detection are implemented. The architecture map intentionally
-distinguishes the implemented local index from the planned PostgreSQL store.
+In memory mode this coordination is process-local, so use a single worker. With
+`STORAGE_BACKEND=postgres` the same guarantees hold across workers (see
+[Cross-worker guarantees](#cross-worker-guarantees-postgres)).
 
 ## Workspace structure
 

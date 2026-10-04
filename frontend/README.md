@@ -15,8 +15,10 @@ Development account shortcuts are excluded from production builds.
 
 ## User flow
 
-Overview → Knowledge base → Agent workspace → Security events (staff), with
-Architecture available throughout to explain components and security boundaries.
+Overview → Knowledge base → Agent workspace → Approvals / Security events (staff) →
+Red-team lab and Threat coverage for assurance, with Architecture available
+throughout to explain components and security boundaries. Navigation is grouped
+as Monitor, Operate, Assure and Govern; staff see a live badge for waiting approvals.
 Examples fill a draft; sending is an explicit action.
 
 | Page | Access | Purpose |
@@ -28,7 +30,10 @@ Examples fill a draft; sending is an explicit action.
 | Firewall lab | All authenticated users | Text/channel scan and editable presets; rule list for staff |
 | Security events | Staff | Live filters, expandable evidence, JSON export of at most 200 matching events |
 | Trust | Staff | Trust histories; administrator overrides |
-| Policies & tools | Existing role controls | Per-agent policies, tool registry, gateway evidence |
+| Policies & tools | Existing role controls | Per-agent policies, tool registry (incl. which tools need human approval), gateway evidence |
+| Approvals | Staff (admins decide) | Held high-impact tool calls with arguments and passed checks; approve (re-checked) or reject with a note; recent decisions |
+| Red-team lab | Staff | Launch the attack suites against a sandbox; detection KPIs, per-family chart, confusion matrix, case explorer, agent scenarios, run history and export |
+| Threat coverage | All authenticated users | OWASP Top 10 for LLM Applications 2025 and MITRE ATLAS coverage matrix, live red-team evidence, residual risk, code paths |
 
 ## Design and reliability
 
