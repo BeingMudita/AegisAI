@@ -14,7 +14,7 @@ router = APIRouter(prefix="/firewall", tags=["firewall"])
 
 
 @router.post("/scan", response_model=FirewallVerdict)
-async def scan(
+def scan(
     req: ScanRequest,
     user: User = Depends(get_current_user),
 ) -> FirewallVerdict:
@@ -23,7 +23,7 @@ async def scan(
 
 
 @router.get("/rules", response_model=list[RuleInfo])
-async def list_rules(
+def list_rules(
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> list[RuleInfo]:
     """List every detection rule and its weight."""

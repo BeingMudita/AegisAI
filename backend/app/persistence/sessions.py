@@ -64,7 +64,7 @@ def _progress(run: SessionRun) -> RunProgress:
 
 def _agent_id(db: Session, name: str) -> uuid.UUID:
     db.execute(insert(Agent).values(id=uuid.uuid4(), name=name).on_conflict_do_nothing())
-    return db.scalar(select(Agent.id).where(Agent.name == name))
+    return db.execute(select(Agent.id).where(Agent.name == name)).scalar_one()
 
 
 class PostgresSessionStore(SessionStore):
@@ -84,29 +84,47 @@ class PostgresSessionStore(SessionStore):
             )
         return record
 
+    @staticmethod
+    def _head(db: Session, sid: uuid.UUID) -> AgentSessionRecord | None:
+        hit = db.execute(
+            select(AgentSession, Agent.name)
+            .join(Agent, Agent.id == AgentSession.agent_id)
+            .where(AgentSession.id == sid)
+        ).first()
+        if hit is None:
+            return None
+        row, agent = hit
+        return AgentSessionRecord(
+            id=str(row.id),
+            agent=agent or "",
+            owner=(row.meta or {}).get("owner", ""),
+            status=row.status,
+            created_at=row.started_at,
+            ended_at=row.ended_at,
+        )
+
+    def head(self, session_id: str) -> AgentSessionRecord | None:
+        sid = _uuid(session_id)
+        if sid is None:
+            return None
+        with transaction() as db:
+            return self._head(db, sid)
+
     def get(self, session_id: str) -> AgentSessionRecord | None:
         sid = _uuid(session_id)
         if sid is None:
             return None
         with transaction() as db:
-            row = db.get(AgentSession, sid)
-            if row is None:
+            record = self._head(db, sid)
+            if record is None:
                 return None
             turns = db.scalars(
                 select(AgentTurnRow.payload)
                 .where(AgentTurnRow.session_id == sid)
                 .order_by(AgentTurnRow.created_at)
             ).all()
-            agent = db.scalar(select(Agent.name).where(Agent.id == row.agent_id))
-            return AgentSessionRecord(
-                id=str(row.id),
-                agent=agent or "",
-                owner=(row.meta or {}).get("owner", ""),
-                status=row.status,
-                created_at=row.started_at,
-                ended_at=row.ended_at,
-                turns=[AgentTurn.model_validate(t) for t in turns],
-            )
+            record.turns = [AgentTurn.model_validate(t) for t in turns]
+            return record
 
     def list(self, owner: str | None = None) -> list[SessionSummary]:
         counts = (
@@ -140,10 +158,6 @@ class PostgresSessionStore(SessionStore):
                 )
                 for row, agent, turns, blocked in db.execute(query)
             ]
-
-    def add_turn(self, session_id: str, turn: AgentTurn) -> None:
-        with transaction() as db:
-            self._insert_turn(db, uuid.UUID(session_id), turn, None)
 
     @staticmethod
     def _insert_turn(db: Session, sid: uuid.UUID, turn: AgentTurn, request_id: str | None) -> None:

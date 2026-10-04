@@ -177,8 +177,8 @@ export default function App() {
   const drawer = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const runtime = useApi<{ brain: string }>(user ? "/api/agents/runtime" : null);
-  const approvals = useApi<{ pending: unknown[] }>(isStaff(user) ? "/api/approvals" : null, 5000);
-  const pendingApprovals = approvals.data?.pending.length ?? 0;
+  const approvals = useApi<{ pending: number }>(isStaff(user) ? "/api/approvals/pending-count" : null, 5000);
+  const pendingApprovals = approvals.data?.pending ?? 0;
 
   useEffect(() => {
     if (!menuOpen) return;

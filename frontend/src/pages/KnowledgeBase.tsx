@@ -19,7 +19,7 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import { Fragment, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import { api, upload } from "../api";
 import { isStaff, useAuth } from "../auth";
@@ -408,7 +408,7 @@ function JobRow({ job, canCancel, onCancel }: { job: IngestJob; canCancel: boole
           {job.source} · {job.origin}
         </span>
         <Badge tone={trustTone(job.trust_level)}>{job.trust_level.toLowerCase()}</Badge>
-        <Badge tone={actionTone(job.stage)}>{STAGE_LABEL[job.stage]}</Badge>
+        <Badge tone={actionTone(job.stage)}>{job.duplicate_of ? "Already indexed" : STAGE_LABEL[job.stage]}</Badge>
         {canCancel && running && (
           <Button variant="subtle" size="sm" onClick={onCancel}>
             Cancel
@@ -445,6 +445,9 @@ function JobRow({ job, canCancel, onCancel }: { job: IngestJob; canCancel: boole
         </span>
         {seconds !== null && <span className="tabular">{seconds.toFixed(1)} s</span>}
       </div>
+      {job.duplicate_of && (
+        <p className="text-xs text-muted">This content is already in the knowledge base, so it was not indexed again.</p>
+      )}
       {job.error && <ErrorNote message={job.error} />}
     </li>
   );
@@ -457,8 +460,11 @@ export default function KnowledgeBase() {
   const staff = isStaff(user);
   const [tab, setTab] = useState<Tab>(admin ? "add" : "search");
 
-  const jobs = useApi<IngestJob[]>(staff ? "/api/retrieval/jobs" : null, 1000);
+  // Poll the job list fast only while something is ingesting; queuing files reloads it at once.
+  const [ingesting, setIngesting] = useState(false);
+  const jobs = useApi<IngestJob[]>(staff ? "/api/retrieval/jobs" : null, ingesting ? 1000 : 5000);
   const anyRunning = (jobs.data ?? []).some((j) => !["COMPLETED", "FAILED", "CANCELLED"].includes(j.stage));
+  useEffect(() => setIngesting(anyRunning), [anyRunning]);
   const stats = useApi<KbStats>("/api/retrieval", anyRunning ? 1000 : 5000);
   const documents = useApi<IngestReport[]>(staff ? "/api/retrieval/documents" : null, anyRunning ? 2000 : 10000);
   const quarantine = useApi<QuarantinedChunk[]>(staff ? "/api/retrieval/quarantine" : null, anyRunning ? 2000 : 10000);

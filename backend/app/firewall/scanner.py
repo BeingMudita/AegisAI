@@ -16,7 +16,7 @@ from functools import lru_cache
 
 from app.config import get_settings
 from app.database.enums import SecurityEventType, SecuritySeverity
-from app.firewall.normalize import normalize
+from app.firewall.normalize import normalize, strip_invisible
 from app.firewall.rules import RULES, SIGNAL_RULES, Rule
 from app.firewall.schemas import (
     ContentChannel,
@@ -74,25 +74,29 @@ class PromptFirewall:
                 )
 
         # 2. Alternate readings (de-leeted, de-spaced). A rule that only fires
-        #    here means the author obfuscated it on purpose.
+        #    here means the author obfuscated it on purpose. Spans are mapped back
+        #    to the canonical text so the obfuscated span can be redacted too.
         evaded = False
-        for variant in norm.variants:
+        for number, variant in enumerate(norm.variants):
             for rule in self.rules:
                 if rule.rule_id in matches:
                     continue
                 m = rule.pattern.search(variant)
                 if m:
                     evaded = True
+                    start, end = norm.variant_span(number, m.start(), m.end())
                     matches[rule.rule_id] = RuleMatch(
                         rule_id=rule.rule_id,
                         category=rule.category,
                         weight=rule.weight_for(indirect),
                         excerpt=_excerpt(m.group(0)),
+                        start=start,
+                        end=end,
                     )
 
-        # 3. Encoded payloads.
+        # 3. Encoded payloads — the span is the whole encoded token.
         hidden_payload = False
-        for payload in norm.decoded_payloads:
+        for payload, (start, end) in zip(norm.decoded_payloads, norm.payload_spans, strict=True):
             for rule in self.rules:
                 m = rule.pattern.search(payload)
                 if m and rule.rule_id not in matches:
@@ -102,6 +106,8 @@ class PromptFirewall:
                         category=rule.category,
                         weight=rule.weight_for(indirect),
                         excerpt=_excerpt("base64→ " + m.group(0)),
+                        start=start,
+                        end=end,
                     )
 
         # 4. Obfuscation signals.
@@ -164,17 +170,28 @@ class PromptFirewall:
     # ------------------------------------------------------------ sanitizing
     @staticmethod
     def sanitize(text: str, verdict: FirewallVerdict) -> str:
-        """Return the normalized text with matched injection spans removed."""
-        canonical = normalize(text).text
+        """Return ``text`` with every matched injection span replaced by a marker.
+
+        Spans are found in the canonical text and cut out of the *original*, so the
+        rest keeps its line breaks, tables and non-Latin script; invisible characters
+        are stripped from what is kept. ``verdict`` must come from scanning ``text``.
+        """
+        norm = normalize(text)
         merged: list[list[int]] = []
         for start, end in sorted((m.start, m.end) for m in verdict.matches if m.start >= 0):
             if merged and start <= merged[-1][1]:
                 merged[-1][1] = max(merged[-1][1], end)
             else:
                 merged.append([start, end])
-        for start, end in reversed(merged):
-            canonical = canonical[:start] + REDACTION + canonical[end:]
-        return canonical
+        out: list[str] = []
+        kept_from = 0
+        for start, end in merged:
+            cut_start, cut_end = norm.original_span(start, end)
+            out.append(strip_invisible(text[kept_from:cut_start]))
+            out.append(REDACTION)
+            kept_from = cut_end
+        out.append(strip_invisible(text[kept_from:]))
+        return "".join(out)
 
     # ------------------------------------------------------------- auditing
     def inspect(

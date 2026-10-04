@@ -32,6 +32,12 @@ def approval_queue(user: User = Depends(require_roles(*STAFF_ROLES))) -> Approva
     )
 
 
+@router.get("/pending-count")
+def pending_count(user: User = Depends(require_roles(*STAFF_ROLES))) -> dict[str, int]:
+    """How many requests wait for a decision (a cheap poll for the navigation badge)."""
+    return {"pending": get_tool_gateway().pending_count()}
+
+
 @router.post("/{request_id}/approve", response_model=ToolCallResult)
 def approve(
     request_id: str,

@@ -1,5 +1,6 @@
 """Tests for the tool gateway (Phase 5)."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database.enums import (
@@ -103,6 +104,76 @@ def test_domain_allow_list_enforced() -> None:
     assert ok.status == ToolRequestStatus.EXECUTED  # subdomain of wikipedia.org
 
 
+@pytest.mark.parametrize(
+    ("agent", "tool", "args"),
+    [
+        # A list of recipients: the last "@" is on an allowed domain, the first is not.
+        ("FinanceAgent", "send_email", {"to": "attacker@evil.io, cfo@company.com"}),
+        ("FinanceAgent", "send_email", {"to": "attacker@evil.io;cfo@company.com"}),
+        ("FinanceAgent", "send_email", {"to": "CFO <attacker@evil.io> cfo@company.com"}),
+        ("FinanceAgent", "send_email", {"to": "attacker@evil.io@company.com"}),
+        # Python reads the host as company.com; browsers and curl read evil.io.
+        ("ResearchAgent", "web_fetch", {"url": "https://evil.io\\@company.com/news"}),
+        ("ResearchAgent", "web_fetch", {"url": "https://user@company.com/news"}),
+        ("ResearchAgent", "web_fetch", {"url": "http://company.com/news"}),
+        ("ResearchAgent", "web_fetch", {"url": "ftp://company.com/news"}),
+        ("ResearchAgent", "web_fetch", {"url": "https://company.com/news evil.io"}),
+    ],
+)
+def test_ambiguous_destinations_are_denied(agent: str, tool: str, args: dict) -> None:
+    result = _gateway().execute(agent, tool, {"subject": "s", "body": "b", **args})
+    assert _failed_at(result) == "domain"
+    assert OUTBOX == []
+
+
+def test_secrets_are_redacted_from_outgoing_arguments() -> None:
+    gw = _gateway()
+    body = "Numbers attached. Our key is sk-live0123456789abcdefghijkl, call +1 415-555-0132."
+    result = gw.execute("FinanceAgent", "send_email", {"to": "cfo@company.com", "body": body})
+    assert result.pending  # FinanceAgent handles sensitive data: key and phone both go
+    assert "sk-live" not in result.arguments["body"]
+    assert "555-0132" not in result.arguments["body"]
+    assert result.redactions == {"API_KEY": 1, "PHONE": 1}
+    assert any(c.checkpoint == "dlp" for c in result.checks)
+
+
+def test_trust_is_scoped_to_the_principal() -> None:
+    gw = _gateway()
+    for _ in range(3):  # "mallory" keeps asking FinanceAgent for a tool it may not use
+        gw.execute("FinanceAgent", "web_fetch", {"url": "https://company.com"}, principal="mallory")
+    assert gw.trust.agent_score("FinanceAgent", "mallory") == pytest.approx(0.45)
+    # ... which costs FinanceAgent only in mallory's hands:
+    assert gw.trust.score(SubjectType.AGENT, "FinanceAgent") == 0.75
+    invoices = {"table": "invoices"}
+    assert gw.execute("FinanceAgent", "read_database", invoices, principal="alice").executed
+    denied = gw.execute("FinanceAgent", "read_database", invoices, principal="mallory")
+    assert _failed_at(denied) == "trust"
+    assert denied.requested_by == "mallory"
+    # An administrator's verdict on the agent itself applies to everyone.
+    gw.trust.override(SubjectType.AGENT, "FinanceAgent", 0.5, rationale="t", assessed_by="t")
+    assert gw.trust.agent_score("FinanceAgent", "alice") == 0.5
+
+
+def test_tools_use_the_gateways_own_knowledge_base_and_outbox() -> None:
+    class _KB:
+        def retrieve(self, query, **_):  # type: ignore[no-untyped-def]
+            raise AssertionError(f"isolated knowledge base used for {query!r}")
+
+    outbox: list[dict[str, str]] = []
+    gw = ToolGateway(
+        config=get_global_config(),
+        firewall=PromptFirewall(),
+        trust=TrustEngine(),
+        knowledge_base=_KB(),
+        outbox=outbox,
+    )
+    failed = gw.execute("FinanceAgent", "search_documents", {"query": "invoices"})
+    assert "isolated knowledge base" in failed.decision_reason
+    pending = gw.execute("FinanceAgent", "send_email", {"to": "cfo@company.com", "body": "b"})
+    gw.approve(pending.id, "admin")
+    assert len(outbox) == 1 and OUTBOX == []
+
+
 def test_injection_in_arguments_blocked() -> None:
     result = _gateway().execute(
         "ResearchAgent",
@@ -162,15 +233,17 @@ def test_tools_api() -> None:
     agent = _token("agent", "agent123")
     assert client.get("/api/tools", headers=_h(agent)).status_code == 403
 
-    resp = client.post(
-        "/api/tools/execute",
-        json={"agent": "FinanceAgent", "tool": "shell", "arguments": {"command": "id"}},
-        headers=_h(agent),
-    )
+    # Calling a tool directly means acting *as* an agent: operators only.
+    call = {"agent": "FinanceAgent", "tool": "shell", "arguments": {"command": "id"}}
+    analyst = _token("analyst", "analyst123")
+    for token in (agent, analyst):
+        assert client.post("/api/tools/execute", json=call, headers=_h(token)).status_code == 403
+
+    admin = _token("admin", "admin123")
+    resp = client.post("/api/tools/execute", json=call, headers=_h(admin))
     assert resp.status_code == 200
     assert resp.json()["status"] == "DENIED"
 
-    analyst = _token("analyst", "analyst123")
     tools = client.get("/api/tools", headers=_h(analyst)).json()["tools"]
     assert {t["name"] for t in tools} >= {"shell", "send_email", "read_database"}
     log = client.get("/api/tools/requests", headers=_h(analyst)).json()

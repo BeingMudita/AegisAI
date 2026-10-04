@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.redteam.runner import (
     load_agent_scenarios,
     load_firewall_cases,
+    load_holdout_cases,
     run_agent_scenarios,
     run_firewall_benchmark,
 )
@@ -93,9 +94,11 @@ class RedTeamService:
             if self._running() is not None:
                 raise RunConflict("A red-team run is already in progress.")
             ordered = [s for s in ("firewall", "agents") if s in suites]
-            total = (len(load_firewall_cases()) if "firewall" in ordered else 0) + (
-                len(load_agent_scenarios()) if "agents" in ordered else 0
-            )
+            total = (
+                len(load_firewall_cases()) + len(load_holdout_cases())
+                if "firewall" in ordered
+                else 0
+            ) + (len(load_agent_scenarios()) if "agents" in ordered else 0)
             run = RedTeamRun(suites=ordered, started_by=started_by, progress_total=total)
             self.store.save(run)
         thread = threading.Thread(
@@ -121,6 +124,8 @@ class RedTeamService:
             with isolated_audit_log():  # simulated attacks stay out of the real audit trail
                 if "firewall" in run.suites:
                     run.firewall = run_firewall_benchmark(progress=tick)
+                    if holdout := load_holdout_cases():
+                        run.holdout = run_firewall_benchmark(holdout, progress=tick)
                     self.store.save(run)
                 if "agents" in run.suites:
                     run.agents = run_agent_scenarios(progress=tick)
@@ -148,5 +153,5 @@ def get_redteam_service() -> RedTeamService:
     if get_settings().use_postgres:
         from app.persistence.redteam import PostgresRunStore
 
-        return RedTeamService(PostgresRunStore())
+        return RedTeamService(PostgresRunStore(keep=_HISTORY))
     return RedTeamService(MemoryRunStore())

@@ -46,7 +46,8 @@ from collections.abc import Iterator  # noqa: E402
 import pytest  # noqa: E402
 
 from app.agents.sessions import get_session_store  # noqa: E402
-from app.auth.limiter import login_limiter  # noqa: E402
+from app.auth.limiter import clear_login_limits  # noqa: E402
+from app.policies.store import clear_policy_cache  # noqa: E402
 from app.redteam.service import get_redteam_service  # noqa: E402
 from app.telemetry.store import get_audit_log  # noqa: E402
 from app.tools.gateway import get_tool_gateway  # noqa: E402
@@ -55,7 +56,8 @@ from app.trust.engine import get_trust_engine  # noqa: E402
 
 
 def _clear() -> None:
-    login_limiter.clear()
+    clear_login_limits()
+    clear_policy_cache()
     audit = get_audit_log()
     if POSTGRES:
         audit.truncate_for_tests()  # type: ignore[attr-defined]  (durable log refuses clear())

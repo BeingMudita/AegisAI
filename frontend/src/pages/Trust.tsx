@@ -7,6 +7,17 @@ import { Badge, Button, Card, Empty, ErrorNote, Meter, PageHeader, inputClass, t
 import { formatTime, useApi } from "../hooks";
 import type { SubjectType, TrustDetail, TrustScore } from "../types";
 
+/** "FinanceAgent@admin" is FinanceAgent's trust while acting for admin (per-user trust). */
+function subjectLabel(type: SubjectType, id: string) {
+  const at = type === "AGENT" ? id.indexOf("@") : -1;
+  if (at < 0) return <>{id}</>;
+  return (
+    <>
+      {id.slice(0, at)} <span className="text-xs font-normal text-muted">· for {id.slice(at + 1)}</span>
+    </>
+  );
+}
+
 export default function Trust() {
   const { user } = useAuth();
   const list = useApi<{ scores: TrustScore[]; threshold: number }>("/api/trust", 4000);
@@ -78,7 +89,7 @@ export default function Trust() {
                       onClick={() => setSelected({ type: s.subject_type, id: s.subject_id })}
                       className={`cursor-pointer ${active ? "bg-surface-2" : "hover:bg-surface-2"}`}
                     >
-                      <td className="border-b border-edge py-1.5 pr-3 font-medium">{s.subject_id}</td>
+                      <td className="border-b border-edge py-1.5 pr-3 font-medium">{subjectLabel(s.subject_type, s.subject_id)}</td>
                       <td className="border-b border-edge py-1.5 pr-3 text-xs text-ink-2">
                         {s.subject_type.toLowerCase()}
                       </td>

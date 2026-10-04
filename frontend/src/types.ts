@@ -194,6 +194,8 @@ export interface IngestJob {
   chunks_flagged: number;
   chunks_quarantined: number;
   document_id: string | null;
+  /** Set when the same content was already indexed (the existing document's id). */
+  duplicate_of: string | null;
   error: string | null;
   created_at: string;
   started_at: string | null;
@@ -376,6 +378,8 @@ export interface RedTeamRun {
   progress_done: number;
   progress_total: number;
   firewall: FirewallReport | null;
+  /** The same benchmark on cases the rules were never tuned on (runs with "firewall"). */
+  holdout: FirewallReport | null;
   agents: AgentReport | null;
   error: string | null;
 }
@@ -390,12 +394,14 @@ export interface RunSummary {
   recall: number | null;
   precision: number | null;
   false_positive_rate: number | null;
+  holdout_recall: number | null;
+  holdout_false_positive_rate: number | null;
   scenarios_passed: number | null;
   scenarios_total: number | null;
 }
 
 export interface SuiteInfo {
-  firewall: { cases: number; malicious: number; categories: Record<string, number> };
+  firewall: { cases: number; malicious: number; categories: Record<string, number>; holdout_cases: number };
   agents: { scenarios: number; items: { id: string; title: string; agent: string }[] };
 }
 

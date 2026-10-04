@@ -10,6 +10,7 @@ Two ways to add files:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -20,7 +21,7 @@ from app.auth.schemas import User
 from app.config import get_settings
 from app.database.enums import TrustLevel
 from app.rag.ingestion import get_ingestion_manager
-from app.rag.knowledge_base import get_knowledge_base
+from app.rag.knowledge_base import DuplicateDocument, get_knowledge_base
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported
 from app.rag.schemas import (
     DocumentChunkView,
@@ -63,8 +64,11 @@ def ingest_document(
     req: IngestRequest,
     user: User = Depends(require_roles(Role.ADMIN)),
 ) -> IngestReport:
-    """Screen, chunk, embed and index pasted text."""
-    return get_knowledge_base().ingest(req)
+    """Screen, chunk, embed and index pasted text (409 if it is already indexed)."""
+    try:
+        return get_knowledge_base().ingest(req)
+    except DuplicateDocument as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkView])
@@ -108,9 +112,11 @@ def upload_files(
             )
         target = manager.upload_dir / f"{uuid.uuid4().hex[:8]}-{name}"
         written = 0
+        digest = hashlib.sha256()  # hashed while copying, for duplicate detection
         with target.open("wb") as out:
             while block := upload.file.read(_COPY_CHUNK):
                 written += len(block)
+                digest.update(block)
                 if written > limit:
                     out.close()
                     target.unlink(missing_ok=True)
@@ -129,6 +135,7 @@ def upload_files(
                 origin="upload",
                 delete_after=True,
                 filename=name,
+                content_hash=digest.hexdigest(),
             )
         )
     return jobs

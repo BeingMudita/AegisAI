@@ -1,10 +1,22 @@
-"""Durable audit log: ``security_events`` and ``decision_counters``."""
+"""Durable audit log: ``security_events`` and ``decision_counters``.
+
+Security events are written as they happen. Decision counters change on every
+checkpoint (several per agent turn), and all workers would contend for the same few
+counter rows, so each worker adds its counts up in memory and writes them in one
+statement at most every ``FLUSH_INTERVAL`` seconds — and before it reports a summary,
+and at shutdown. A crash can lose at most that interval's worth of counts.
+"""
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from collections import Counter
+from collections.abc import Sequence
+from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Row, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.database.enums import SecurityEventType, SecuritySeverity
@@ -32,9 +44,15 @@ def _to_record(row: SecurityEvent) -> SecurityEventRecord:
     )
 
 
+FLUSH_INTERVAL = 2.0  # seconds
+
+
 class PostgresAuditLog(AuditLog):
     def __init__(self) -> None:
         super().__init__(max_events=1)  # the in-memory buffer is unused
+        self._pending: dict[str, Counter[str]] = {}
+        self._pending_lock = threading.Lock()
+        self._last_flush = time.monotonic()
 
     # ------------------------------------------------------------- writing
     def _store_event(self, event: SecurityEventRecord) -> None:
@@ -56,16 +74,41 @@ class PostgresAuditLog(AuditLog):
     def count_decisions(self, component: str, *, allowed: int = 0, denied: int = 0) -> None:
         if not allowed and not denied:
             return
-        stmt = insert(DecisionCounter).values(component=component, allowed=allowed, denied=denied)
+        with self._pending_lock:
+            counter = self._pending.setdefault(component, Counter())
+            counter["allowed"] += allowed
+            counter["denied"] += denied
+            due = time.monotonic() - self._last_flush >= FLUSH_INTERVAL
+        if due:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write the buffered decision counts (one upsert for every component)."""
+        with self._pending_lock:
+            pending, self._pending = self._pending, {}
+            self._last_flush = time.monotonic()
+        if not pending:
+            return
+        rows = [
+            {"component": c, "allowed": n["allowed"], "denied": n["denied"]}
+            for c, n in sorted(pending.items())
+        ]
+        stmt = insert(DecisionCounter).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=[DecisionCounter.component],
             set_={
-                "allowed": DecisionCounter.allowed + allowed,
-                "denied": DecisionCounter.denied + denied,
+                "allowed": DecisionCounter.allowed + stmt.excluded.allowed,
+                "denied": DecisionCounter.denied + stmt.excluded.denied,
             },
         )
-        with transaction() as db:
-            db.execute(stmt)
+        try:
+            with transaction() as db:
+                db.execute(stmt)
+        except Exception:
+            with self._pending_lock:  # keep the counts for the next attempt
+                for component, counts in pending.items():
+                    self._pending.setdefault(component, Counter()).update(counts)
+            raise
 
     # ------------------------------------------------------------- reading
     def list_events(
@@ -91,10 +134,11 @@ class PostgresAuditLog(AuditLog):
             return [_to_record(row) for row in db.scalars(query)]
 
     def summary(self) -> TelemetrySummary:
+        self.flush()
         with transaction() as db:
             total = db.scalar(select(func.count()).select_from(SecurityEvent)) or 0
 
-            def grouped(column):  # type: ignore[no-untyped-def]
+            def grouped(column: Any) -> Sequence[Row[Any]]:
                 return db.execute(select(column, func.count()).group_by(column)).all()
 
             by_type = {k.value: n for k, n in grouped(SecurityEvent.event_type)}
@@ -121,6 +165,8 @@ class PostgresAuditLog(AuditLog):
 
     def truncate_for_tests(self) -> None:
         """Test-suite helper: wipe events and counters."""
+        with self._pending_lock:
+            self._pending.clear()
         with transaction() as db:
             db.execute(delete(SecurityEvent))
             db.execute(delete(DecisionCounter))

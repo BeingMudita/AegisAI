@@ -81,6 +81,12 @@ class SessionStore:
         with self._lock:
             return self._sessions.get(session_id)
 
+    def head(self, session_id: str) -> AgentSessionRecord | None:
+        """The session without its turns — enough for ownership and status checks."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return session.model_copy(update={"turns": []}) if session else None
+
     def list(self, owner: str | None = None) -> list[SessionSummary]:
         with self._lock:
             sessions = list(self._sessions.values())
@@ -98,10 +104,6 @@ class SessionStore:
             for s in sorted(sessions, key=lambda s: s.created_at, reverse=True)
             if owner is None or s.owner == owner
         ]
-
-    def add_turn(self, session_id: str, turn: AgentTurn) -> None:
-        with self._lock:
-            self._sessions[session_id].turns.append(turn)
 
     def close(
         self, session_id: str, status: SessionStatus = SessionStatus.CLOSED

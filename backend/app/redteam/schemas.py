@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 Suite = Literal["firewall", "agents"]
 
 
+def _all_suites() -> list[Suite]:
+    return ["firewall", "agents"]
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -88,12 +92,15 @@ class RedTeamRun(BaseModel):
     progress_done: int = 0
     progress_total: int = 0
     firewall: FirewallReport | None = None
+    # The same benchmark on firewall_holdout.yaml — cases the rules were never tuned
+    # on — run together with "firewall".
+    holdout: FirewallReport | None = None
     agents: AgentReport | None = None
     error: str | None = None
 
 
 class RunRequest(BaseModel):
-    suites: list[Suite] = Field(default_factory=lambda: ["firewall", "agents"], min_length=1)
+    suites: list[Suite] = Field(default_factory=_all_suites, min_length=1)
 
 
 class RunSummary(BaseModel):
@@ -108,6 +115,8 @@ class RunSummary(BaseModel):
     recall: float | None = None
     precision: float | None = None
     false_positive_rate: float | None = None
+    holdout_recall: float | None = None
+    holdout_false_positive_rate: float | None = None
     scenarios_passed: int | None = None
     scenarios_total: int | None = None
 
@@ -123,6 +132,8 @@ class RunSummary(BaseModel):
             recall=run.firewall.recall if run.firewall else None,
             precision=run.firewall.precision if run.firewall else None,
             false_positive_rate=run.firewall.false_positive_rate if run.firewall else None,
+            holdout_recall=run.holdout.recall if run.holdout else None,
+            holdout_false_positive_rate=(run.holdout.false_positive_rate if run.holdout else None),
             scenarios_passed=run.agents.passed if run.agents else None,
             scenarios_total=run.agents.scenarios if run.agents else None,
         )

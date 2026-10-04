@@ -1,5 +1,102 @@
 # Changelog
 
+## 2026-10-04 — Code review fixes: security, correctness, performance, supply chain
+
+### What changed
+
+**Security**
+
+- **Direct tool calls are ADMIN only.** `POST /api/tools/execute` let any signed-in
+  user act as any agent (and earn trust on its behalf). Everyone else goes through
+  agent sessions.
+- **One destination per email or URL argument.** The domain check read only the text
+  after the last `@`, so `attacker@evil.io, cfo@company.com` passed as `company.com`.
+  Email arguments must now be one plain address; URLs must be a single `https` URL
+  with no credentials, backslashes or spaces. Anything ambiguous is denied.
+- **Trust is scoped to the principal.** Signals from a turn are charged to
+  `FinanceAgent@<user>`; every gate uses the lower of that and the agent's baseline.
+  One user's attacks can no longer suspend a shared agent for everyone. The baseline
+  moves only by admin override or unattended runs. `/api/agents` reports the trust
+  that gates the agent for the caller; the Trust page shows “FinanceAgent · for admin”.
+  Tool requests record `requested_by`, and approval re-checks against it.
+- **Spotlighting can't be escaped.** Text inside `<data>` blocks is HTML-escaped, so a
+  document containing `</data>` can no longer close the block early.
+- **Login throttling** adds a per-account limit (20 failures / 15 min) next to the
+  per-address one, and disabled accounts get no token. The Docker image sets
+  `FORWARDED_ALLOW_IPS` (private networks) so the throttle sees real client
+  addresses behind a proxy, and nginx replaces any client-supplied `X-Forwarded-For`.
+- **PyJWT replaces python-jose** (unmaintained, with published CVEs); `exp` and `sub`
+  are now required claims.
+- **DLP on outgoing tool arguments.** Email subjects and bodies and upload payloads
+  are redacted before the call is queued or run (secrets always, PII for agents with
+  sensitive data), so neither the recipient nor the stored request sees them.
+
+**Bugs**
+
+- nginx accepts uploads up to 1024 MB (it defaulted to 1 MB) and streams them.
+- `sanitize()` cuts injection spans out of the *original* text, so line breaks,
+  tables and Cyrillic/Greek text survive; leetspeak, spaced-out and base64 matches
+  are removed too (they used to stay), and invisible characters are stripped.
+- A non-object JSON reply from Ollama no longer fails the turn with a 500; every LLM
+  error falls back to the rule-based planner.
+- Turns have a wall-clock budget (`AGENT_TURN_TIMEOUT`, 150 s; nginx waits 200 s).
+- Chunks default to 180 words (was 512): all-MiniLM-L6-v2 reads about 190 words and
+  silently dropped the rest.
+- Red-team runs give the tools the sandbox's own knowledge base and outbox.
+- `tool_definitions` mirrors the policy file (it was seeded with
+  `requires_approval=false` for every tool).
+
+**Performance (Postgres mode)**
+
+- Route handlers that reach a store, and `get_current_user`, are plain `def`, so
+  database calls no longer block the event loop.
+- Progress polling checks session ownership without loading every turn.
+- Decision counters are buffered per worker (one upsert at most every 2 s, before a
+  summary and at shutdown); trust reads are a plain SELECT when the row exists;
+  policies are cached for `POLICY_CACHE_SECONDS` (5 s).
+- New `GET /api/approvals/pending-count` for the navigation badge; the approval queue
+  no longer loads 500 rows; the jobs list polls every 5 s unless something is
+  ingesting; changing a poll interval no longer blanks the data.
+- Migration `0004`: `tool_requests.requested_by`, `lower(...)` indexes for the
+  case-insensitive lookups, and a `(key, at)` index on `rate_limit_hits`. Rate-limit
+  hits older than an hour are swept; `redteam_runs` keeps the newest 25.
+
+**Code health and supply chain**
+
+- Removed the unused async engine (`database/session.py`, `init_db.py`) and the
+  `asyncpg` dependency, `require_any`, `check_sensitive` and `add_turn`.
+  `POST /api/policies` answers 501 (not 201 "not_implemented").
+- `DEBUG` defaults to false. The backend image has no compiler or headers. Dev ports
+  in compose bind to localhost. The Ollama image is pinned.
+- `backend/requirements.lock` pins and hashes every runtime package; the image and CI
+  install from it. CI adds `mypy` (now clean), `pip-audit` and `npm audit`;
+  Dependabot is configured. The audit found 12 advisories in Starlette 0.48, so
+  FastAPI moves to 0.142 and Starlette to 1.7.
+- Re-uploading content that is already indexed (same SHA-256) completes at once as
+  “Already indexed”; pasting duplicate text returns 409.
+
+**Evaluation**
+
+- New held-out firewall set, `attack-scenarios/firewall_holdout.yaml` (53 cases,
+  never used for tuning), scored with every firewall run and shown in the Red-team
+  lab and the report. On it the firewall scores precision 87.5%, recall 45.2%,
+  false-positive rate 9.1% (development set: 97.6% / 95.3% / 3.3%). It catches every
+  obfuscated, delimiter and tool-abuse case and none of the paraphrased ones.
+- Threat coverage: LLM03 Supply Chain moves from gap to partial (new DEPENDENCIES
+  control: 17 controls).
+
+### Validation
+
+- Memory mode: 182 passed, 11 skipped. Postgres mode (`AEGIS_TEST_POSTGRES=1`): 193 passed.
+- New tests cover ambiguous destinations, outgoing DLP, per-principal trust (unit and
+  end to end), sandbox isolation, sanitize formatting and obfuscated spans, per-account
+  throttling, disabled accounts, duplicates, the pending-count endpoint, Ollama
+  fallbacks and the turn budget, spotlight escaping, and the held-out set staying
+  disjoint from the development set.
+- Ruff, mypy, `pip-audit` (no known vulnerabilities) and `npm audit` pass; the
+  frontend type-checks and builds.
+- Evaluation: 21 / 21 agent scenarios; numbers above.
+
 ## 2026-10-03 — Assurance: human approval, red-team lab, threat coverage
 
 ### What changed

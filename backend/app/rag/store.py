@@ -15,12 +15,34 @@ import json
 import os
 import threading
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
 from app.rag.schemas import StoredChunk
 
 _INITIAL_CAPACITY = 1024
+
+
+class VectorStore(Protocol):
+    """What :class:`app.rag.knowledge_base.KnowledgeBase` needs from an index
+    (this in-memory one, or :class:`app.persistence.knowledge.PgVectorStore`)."""
+
+    def add(self, chunks: list[StoredChunk], vectors: list[list[float]]) -> None: ...
+
+    def search(self, vector: list[float], k: int) -> list[tuple[StoredChunk, float]]: ...
+
+    def remove_document(self, document_id: str) -> int: ...
+
+    def chunks_of(self, document_id: str, limit: int = 50) -> list[StoredChunk]: ...
+
+    def memory_bytes(self) -> int: ...
+
+    def save(self, directory: Path) -> None: ...
+
+    def load(self, directory: Path) -> bool: ...
+
+    def __len__(self) -> int: ...
 
 
 class InMemoryVectorStore:

@@ -144,6 +144,9 @@ class AuditLog:
             ],
         )
 
+    def flush(self) -> None:
+        """Write buffered decision counts to durable storage (nothing to do in memory)."""
+
     def clear(self) -> None:
         """Drop all events and counters (tests / admin reset)."""
         with self._lock:

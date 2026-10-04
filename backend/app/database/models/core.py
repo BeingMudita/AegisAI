@@ -13,6 +13,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -148,3 +149,7 @@ class AgentTurnRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+# Policies are looked up by agent name case-insensitively.
+Index("ix_agents_name_lower", func.lower(Agent.name))

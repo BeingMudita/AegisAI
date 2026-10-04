@@ -51,6 +51,8 @@ class IngestReport(BaseModel):
     source_type: SourceType = SourceType.MANUAL
     filename: str | None = None
     size_bytes: int = 0
+    # SHA-256 of the file (or pasted text): the same content is never indexed twice.
+    content_hash: str | None = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -82,6 +84,9 @@ class IngestJob(BaseModel):
     chunks_flagged: int = 0
     chunks_quarantined: int = 0
     document_id: str | None = None
+    # Set when the file's content was already indexed: the job completes without
+    # indexing it again, and document_id points at the existing document.
+    duplicate_of: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None

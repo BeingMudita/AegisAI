@@ -3,7 +3,10 @@
 Suites are YAML files in ``attack-scenarios/`` (``REDTEAM_SUITES_DIR``):
 
 * ``firewall_cases.yaml`` — labelled malicious / benign texts, scanned on their
-  channel. *Detected* = FLAG or BLOCK.
+  channel. *Detected* = FLAG or BLOCK. This is the development set: the rules were
+  tuned while looking at it, so its scores are optimistic.
+* ``firewall_holdout.yaml`` — a held-out set in the same format that the rules were
+  never tuned on; it is scored separately and is the honest estimate.
 * ``agent_scenarios.yaml`` — full guarded agent turns, each in a fresh isolated
   runtime (own trust registry, knowledge base and gateway) with the deterministic
   rule-based brain, checked against expected outcomes.
@@ -68,6 +71,13 @@ def load_firewall_cases() -> list[dict[str, Any]]:
 
 def load_agent_scenarios() -> list[dict[str, Any]]:
     return _load("agent_scenarios.yaml", "scenarios")
+
+
+def load_holdout_cases() -> list[dict[str, Any]]:
+    """The held-out firewall cases (empty if the file is missing)."""
+    if not (suites_dir() / "firewall_holdout.yaml").exists():
+        return []
+    return _load("firewall_holdout.yaml", "cases")
 
 
 def _firewall() -> PromptFirewall:
@@ -178,7 +188,11 @@ def fresh_runtime() -> AgentRuntime:
         top_k=settings.rag_top_k,
     )
     seed_knowledge_base(kb)
-    gateway = ToolGateway(config=config, firewall=firewall, trust=trust)
+    # The tools get the sandbox's own knowledge base and outbox too, so nothing a
+    # scenario does reaches live state.
+    gateway = ToolGateway(
+        config=config, firewall=firewall, trust=trust, knowledge_base=kb, outbox=[]
+    )
     return AgentRuntime(
         brain=RuleBasedBrain(),
         firewall=firewall,
@@ -186,6 +200,7 @@ def fresh_runtime() -> AgentRuntime:
         gateway=gateway,
         knowledge_base=kb,
         max_steps=settings.agent_max_steps,
+        turn_timeout=settings.agent_turn_timeout,
     )
 
 

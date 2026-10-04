@@ -13,7 +13,7 @@ something to catch.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 # --------------------------------------------------------------------- data
@@ -103,6 +103,10 @@ OUTBOX: list[dict[str, str]] = []
 class ToolContext:
     agent: str
     session_id: str | None = None
+    # The state a tool reads or writes, injected by the gateway so an isolated
+    # runtime (a red-team run) never touches the live ones.
+    knowledge_base: Any = None  # None = the process-wide knowledge base
+    outbox: list[dict[str, str]] = field(default_factory=lambda: OUTBOX)
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,7 @@ class ToolImpl:
     run: Callable[[dict[str, Any], ToolContext], str]
     domain_arg: str | None = None  # argument whose host/domain must be allow-listed
     domain_kind: Literal["url", "email"] = "url"
+    egress_args: tuple[str, ...] = ()  # free text that leaves the system (DLP applies)
 
 
 def _require(args: dict[str, Any], key: str) -> str:
@@ -136,9 +141,8 @@ def _search_documents(args: dict[str, Any], ctx: ToolContext) -> str:
 
     query = _require(args, "query")
     top_k = int(args.get("top_k", 3))
-    result = get_knowledge_base().retrieve(
-        query, top_k=top_k, agent=ctx.agent, session_id=ctx.session_id
-    )
+    kb = ctx.knowledge_base or get_knowledge_base()
+    result = kb.retrieve(query, top_k=top_k, agent=ctx.agent, session_id=ctx.session_id)
     if not result.chunks:
         return "No relevant documents found."
     return "\n\n".join(
@@ -176,7 +180,7 @@ def _send_email(args: dict[str, Any], ctx: ToolContext) -> str:
         "subject": str(args.get("subject", "(no subject)")),
         "body": str(args.get("body", "")),
     }
-    OUTBOX.append(message)
+    ctx.outbox.append(message)
     return f"Email to {message['to']} queued in the sandbox outbox (not actually sent)."
 
 
@@ -213,6 +217,7 @@ IMPLEMENTATIONS: dict[str, ToolImpl] = {
             _send_email,
             domain_arg="to",
             domain_kind="email",
+            egress_args=("subject", "body"),
         ),
         ToolImpl("shell", {"command": "shell command"}, _shell),
         ToolImpl(
@@ -220,6 +225,7 @@ IMPLEMENTATIONS: dict[str, ToolImpl] = {
             {"url": "destination URL", "data": "payload"},
             _external_upload,
             domain_arg="url",
+            egress_args=("data",),
         ),
     )
 }

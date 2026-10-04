@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     Float,
+    Index,
     Integer,
     PrimaryKeyConstraint,
     String,
@@ -90,7 +91,10 @@ class DecisionCounter(Base):
 
 
 class ToolDefinition(Base, TimestampMixin):
-    """The registry of tools an agent may request to use (seeded from the policy file)."""
+    """The tool registry, mirrored from ``default_policies.yaml`` on every seed.
+
+    Read-only for reporting: the gateway reads the policy file itself.
+    """
 
     __tablename__ = "tool_definitions"
 
@@ -113,6 +117,8 @@ class ToolRequest(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     agent: Mapped[str] = mapped_column(String(128), index=True)
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # The principal the agent acted for (trust is scoped to them; re-checked on approval).
+    requested_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tool: Mapped[str] = mapped_column(String(128), index=True)
     arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     status: Mapped[ToolRequestStatus] = mapped_column(
@@ -164,9 +170,11 @@ class RateLimitHit(Base):
     """One counted attempt for a shared rolling-window limiter (tool calls, logins)."""
 
     __tablename__ = "rate_limit_hits"
+    # Every check counts one key's hits inside a time window.
+    __table_args__ = (Index("ix_rate_limit_hits_key_at", "key", "at"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    key: Mapped[str] = mapped_column(String(255), index=True)
+    key: Mapped[str] = mapped_column(String(255))
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
@@ -180,3 +188,7 @@ class RedTeamRunRow(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
+
+# The request log and the event log are filtered by agent case-insensitively.
+Index("ix_tool_requests_agent_lower", func.lower(ToolRequest.agent))
+Index("ix_security_events_actor_lower", func.lower(SecurityEvent.actor))

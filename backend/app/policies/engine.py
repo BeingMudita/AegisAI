@@ -74,21 +74,6 @@ class PolicyEngine:
         """Return True if ``data_category`` is marked sensitive for this agent."""
         return data_category in self.policy.sensitive_data
 
-    def check_sensitive(self, data_category: str) -> PolicyDecision:
-        """Flag handling of a sensitive data category (allowed but audited)."""
-        agent = self.policy.agent
-        sensitive = self.is_sensitive(data_category)
-        return PolicyDecision(
-            allowed=not sensitive,
-            reason=(
-                f"'{data_category}' is sensitive for {agent} and requires elevated handling."
-                if sensitive
-                else f"'{data_category}' is not marked sensitive for {agent}."
-            ),
-            agent=agent,
-            subject=data_category,
-        )
-
     # -------------------------------------------------------------- summary
     def allowances(self) -> AgentAllowances:
         """Summarize everything the agent is allowed / restricted to do."""

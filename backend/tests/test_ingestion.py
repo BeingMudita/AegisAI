@@ -263,7 +263,26 @@ def test_upload_api_end_to_end() -> None:
 
     jobs = client.get("/api/retrieval/jobs", headers=admin).json()
     assert jobs[0]["id"] == job_id
+
+    # The same content again (under another name) is recognised, not indexed twice.
+    again = client.post(
+        "/api/retrieval/uploads",
+        files=[("files", ("copy.md", POISONED.encode(), "text/markdown"))],
+        headers=admin,
+    ).json()[0]
+    duplicate = get_ingestion_manager().wait(again["id"])
+    assert duplicate is not None and duplicate.stage == IngestStage.COMPLETED
+    assert duplicate.duplicate_of == job.document_id
+    assert duplicate.chunks_indexed == 0
+    pasted = {"title": "Paste", "content": "Unique pasted note 7f3a.", "source": "notes"}
+    first = client.post("/api/retrieval/documents", json=pasted, headers=admin)
+    assert first.status_code == 201
+    second = client.post("/api/retrieval/documents", json=pasted, headers=admin)
+    assert second.status_code == 409 and "Already in the knowledge base" in second.json()["detail"]
+    client.delete(f"/api/retrieval/documents/{first.json()['document_id']}", headers=admin)
+
     docs = client.get("/api/retrieval/documents", headers=admin).json()
+    assert not any(d["filename"] == "copy.md" for d in docs)
     assert any(d["document_id"] == job.document_id for d in docs)
     chunks = client.get(f"/api/retrieval/documents/{job.document_id}/chunks", headers=admin).json()
     assert len(chunks) == 2

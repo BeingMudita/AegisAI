@@ -13,6 +13,7 @@ Retrieval:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import structlog
 import yaml
@@ -45,7 +47,7 @@ from app.rag.schemas import (
     SourceSummary,
     StoredChunk,
 )
-from app.rag.store import InMemoryVectorStore
+from app.rag.store import InMemoryVectorStore, VectorStore
 from app.telemetry.store import get_audit_log
 from app.trust.engine import TrustEngine, get_trust_engine
 from app.trust.scoring import TrustSignal
@@ -62,6 +64,29 @@ class IngestCancelled(Exception):
     pass
 
 
+class DuplicateDocument(Exception):
+    """The content is already in the knowledge base."""
+
+    def __init__(self, existing: IngestReport) -> None:
+        super().__init__(
+            f"Already in the knowledge base as '{existing.title}' "
+            f"(document {existing.document_id}); delete it first to re-index."
+        )
+        self.existing = existing
+
+
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while block := fh.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 class KnowledgeBase:
     def __init__(
         self,
@@ -75,7 +100,7 @@ class KnowledgeBase:
         top_k: int = 5,
         batch_size: int = 256,
         persist_dir: Path | None = None,
-        store: InMemoryVectorStore | None = None,
+        store: VectorStore | None = None,
     ) -> None:
         self.embedder = embedder
         self.firewall = firewall
@@ -86,7 +111,7 @@ class KnowledgeBase:
         self.top_k = top_k
         self.batch_size = batch_size
         self.persist_dir = persist_dir
-        self.store = store if store is not None else InMemoryVectorStore(embedder.dim)
+        self.store: VectorStore = store if store is not None else InMemoryVectorStore(embedder.dim)
         self._documents: dict[str, IngestReport] = {}
         self._source_levels: dict[str, TrustLevel] = {}
         self._quarantine: list[QuarantinedChunk] = []
@@ -95,7 +120,13 @@ class KnowledgeBase:
 
     # ------------------------------------------------------------ ingestion
     def ingest(self, req: IngestRequest) -> IngestReport:
-        """Chunk, screen, embed and index one in-memory document."""
+        """Chunk, screen, embed and index one in-memory document.
+
+        Raises :class:`DuplicateDocument` if the same text is already indexed.
+        """
+        content_hash = text_hash(req.content)
+        if existing := self.find_by_hash(content_hash):
+            raise DuplicateDocument(existing)
         report = self.ingest_stream(
             ((para, 0) for para in _PARAGRAPH_BREAK.split(req.content)),
             title=req.title,
@@ -103,6 +134,7 @@ class KnowledgeBase:
             trust_level=req.trust_level,
             source_type=req.source_type,
             size_bytes=len(req.content.encode("utf-8")),
+            content_hash=content_hash,
         )
         self.save()
         return report
@@ -117,6 +149,7 @@ class KnowledgeBase:
         source_type: SourceType = SourceType.MANUAL,
         filename: str | None = None,
         size_bytes: int = 0,
+        content_hash: str | None = None,
         progress: ProgressFn | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> IngestReport:
@@ -140,6 +173,7 @@ class KnowledgeBase:
             source_type=source_type,
             filename=filename,
             size_bytes=size_bytes,
+            content_hash=content_hash,
         )
         self._begin_document(report)
         position = {"bytes": 0}
@@ -269,6 +303,13 @@ class KnowledgeBase:
     def documents(self) -> list[IngestReport]:
         with self._lock:
             return sorted(self._documents.values(), key=lambda d: d.created_at, reverse=True)
+
+    def find_by_hash(self, content_hash: str) -> IngestReport | None:
+        """The indexed document with this content, if there is one."""
+        with self._lock:
+            return next(
+                (d for d in self._documents.values() if d.content_hash == content_hash), None
+            )
 
     def document_chunks(self, document_id: str, limit: int = 50) -> list[DocumentChunkView]:
         return [
@@ -480,7 +521,7 @@ def get_knowledge_base() -> KnowledgeBase:
     Either way the demo corpus is seeded the first time the store is empty.
     """
     settings = get_settings()
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "embedder": get_embedder(),
         "firewall": get_firewall(),
         "trust": get_trust_engine(),

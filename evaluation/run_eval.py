@@ -5,6 +5,9 @@ in-process and writes a report:
 
 * **Firewall benchmark** — labelled malicious / benign texts → detection
   precision, recall, F1, false-positive rate, per-category rates, latency.
+  Scored twice: on the development set the rules were tuned on
+  (``firewall_cases.yaml``) and on a held-out set they never saw
+  (``firewall_holdout.yaml``) — the held-out numbers are the honest estimate.
 * **Agent scenarios** — full guarded agent turns (deterministic rule-based
   brain, fresh isolated runtime per scenario) checked against expected
   outcomes: what was blocked, which tools ran, were refused (and where) or
@@ -51,6 +54,14 @@ def run_firewall_benchmark(cases: list[dict[str, Any]] | None = None) -> dict[st
         return runner.run_firewall_benchmark(cases).model_dump(mode="json")
 
 
+def run_holdout_benchmark() -> dict[str, Any] | None:
+    cases = runner.load_holdout_cases()
+    if not cases:
+        return None
+    with isolated_audit_log():
+        return runner.run_firewall_benchmark(cases).model_dump(mode="json")
+
+
 def run_agent_scenarios(scenarios: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     with isolated_audit_log():
         return runner.run_agent_scenarios(scenarios).model_dump(mode="json")
@@ -59,7 +70,25 @@ def run_agent_scenarios(scenarios: list[dict[str, Any]] | None = None) -> dict[s
 # --------------------------------------------------------------------------- #
 # Report
 # --------------------------------------------------------------------------- #
-def render_markdown(fw: dict[str, Any], ag: dict[str, Any]) -> str:
+def _metric_rows(fw: dict[str, Any]) -> list[str]:
+    c = fw["confusion"]
+    return [
+        "| Metric | Value |",
+        "|---|---|",
+        f"| Precision | {fw['precision']:.1%} |",
+        f"| Recall (detection rate) | {fw['recall']:.1%} |",
+        f"| F1 | {fw['f1']:.3f} |",
+        f"| False-positive rate | {fw['false_positive_rate']:.1%} |",
+        f"| Malicious inputs blocked outright | {fw['block_rate_malicious']:.1%} |",
+        f"| Benign inputs blocked outright | {fw['block_rate_benign']:.1%} |",
+        "",
+        f"Confusion matrix: TP {c['tp']} · FN {c['fn']} · FP {c['fp']} · TN {c['tn']}",
+    ]
+
+
+def render_markdown(
+    fw: dict[str, Any], ag: dict[str, Any], holdout: dict[str, Any] | None = None
+) -> str:
     c = fw["confusion"]
     lines = [
         "# AegisAI evaluation report",
@@ -68,10 +97,11 @@ def render_markdown(fw: dict[str, Any], ag: dict[str, Any]) -> str:
         f"firewall thresholds: flag {get_settings().firewall_flag_threshold}, "
         f"block {get_settings().firewall_block_threshold} · agent brain: rule_based_",
         "",
-        "## Firewall benchmark",
+        "## Firewall benchmark — development set",
         "",
         f"{fw['cases']} labelled inputs ({fw['malicious']} malicious, {fw['benign']} benign). "
-        "*Detected* means FLAG or BLOCK.",
+        "*Detected* means FLAG or BLOCK. The detection rules were tuned on this set, so "
+        "these numbers are optimistic; see the held-out set below for an unbiased estimate.",
         "",
         "| Metric | Value |",
         "|---|---|",
@@ -113,6 +143,21 @@ def render_markdown(fw: dict[str, Any], ag: dict[str, Any]) -> str:
     _rows("Missed attacks (false negatives)", fw["misses"])
     _rows("False positives", fw["false_positives"])
 
+    if holdout is not None:
+        lines += [
+            "",
+            "## Firewall benchmark — held-out set",
+            "",
+            f"{holdout['cases']} labelled inputs ({holdout['malicious']} malicious, "
+            f"{holdout['benign']} benign) from `firewall_holdout.yaml`: new phrasings of each "
+            "attack family and hard benign look-alikes, written after the rules and never used "
+            "to tune them. This is the better estimate of how the signature layer generalises.",
+            "",
+            *_metric_rows(holdout),
+        ]
+        _rows("Held-out: missed attacks", holdout["misses"])
+        _rows("Held-out: false positives", holdout["false_positives"])
+
     lines += [
         "",
         "## Agent scenarios",
@@ -138,18 +183,25 @@ def main(argv: list[str] | None = None) -> int:
 
     configure_logging("CRITICAL")
     fw = run_firewall_benchmark()
+    holdout = run_holdout_benchmark()
     ag = run_agent_scenarios()
 
     args.out.mkdir(parents=True, exist_ok=True)
+    results = {"firewall": fw, "holdout": holdout, "agents": ag}
     (args.out / "results.json").write_text(
-        json.dumps({"firewall": fw, "agents": ag}, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    (args.out / "report.md").write_text(render_markdown(fw, ag), encoding="utf-8")
+    (args.out / "report.md").write_text(render_markdown(fw, ag, holdout), encoding="utf-8")
 
     print(
         f"Firewall: precision {fw['precision']:.1%}, recall {fw['recall']:.1%}, "
-        f"FPR {fw['false_positive_rate']:.1%}, p95 {fw['latency_ms']['p95']} ms"
+        f"FPR {fw['false_positive_rate']:.1%}, p95 {fw['latency_ms']['p95']} ms (development set)"
     )
+    if holdout is not None:
+        print(
+            f"Held-out: precision {holdout['precision']:.1%}, recall {holdout['recall']:.1%}, "
+            f"FPR {holdout['false_positive_rate']:.1%}"
+        )
     print(f"Agents:   {ag['passed']}/{ag['scenarios']} scenarios passed")
     for r in ag["results"]:
         if not r["passed"]:

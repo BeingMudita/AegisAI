@@ -25,7 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.brain import AgentBrain, get_brain
 from app.agents.schemas import AgentAction, AgentTurn, TraceEntry, TurnContext
 from app.config import get_settings
-from app.database.enums import SecurityEventType, SecuritySeverity, SubjectType
+from app.database.enums import SecurityEventType, SecuritySeverity
 from app.firewall.dlp import redact
 from app.firewall.scanner import PromptFirewall, get_firewall
 from app.firewall.schemas import ContentChannel, FirewallAction
@@ -52,6 +52,8 @@ SUSPENDED = (
 class AgentState(TypedDict, total=False):
     progress: Callable[[TraceEntry], None] | None
     agent: str
+    principal: str | None  # who is driving the agent; trust is scoped to them
+    deadline: float | None  # time.monotonic() by which the turn must finish
     session_id: str
     message: str
     safe_message: str
@@ -76,6 +78,7 @@ class AgentRuntime:
         gateway: ToolGateway,
         knowledge_base: KnowledgeBase,
         max_steps: int = 3,
+        turn_timeout: float | None = None,
     ) -> None:
         self.brain = brain
         self.firewall = firewall
@@ -83,6 +86,7 @@ class AgentRuntime:
         self.gateway = gateway
         self.kb = knowledge_base
         self.max_steps = max_steps
+        self.turn_timeout = turn_timeout
         self.graph = self._build()
 
     # ---------------------------------------------------------------- graph
@@ -146,15 +150,15 @@ class AgentRuntime:
             context=state.get("context", []),
             steps=state.get("steps", []),
             history=state.get("history", []),
+            deadline=state.get("deadline"),
         )
 
     # ---------------------------------------------------------------- nodes
     def guard_input(self, state: AgentState) -> AgentState:
         agent, session_id, message = state["agent"], state["session_id"], state["message"]
+        principal = state.get("principal")
 
-        standing = self.trust.evaluate(
-            SubjectType.AGENT, agent, required=0.0, action="start a turn"
-        )
+        standing = self.trust.evaluate_agent(agent, principal, required=0.0, action="start a turn")
         if not standing.allowed:
             return {
                 "blocked": True,
@@ -178,9 +182,9 @@ class AgentRuntime:
             "rules": [m.rule_id for m in verdict.matches],
         }
         if verdict.action == FirewallAction.BLOCK:
-            self.trust.observe(
-                SubjectType.AGENT,
+            self.trust.observe_agent(
                 agent,
+                principal,
                 TrustSignal.FIREWALL_BLOCK,
                 rationale="Blocked prompt injection in user input",
                 session_id=session_id,
@@ -199,9 +203,9 @@ class AgentRuntime:
             # Suspicious but not conclusive: let it through unchanged (rewriting a
             # user's request would garble it) — it is audited, costs trust, and
             # every action it leads to still has to pass the tool gateway.
-            self.trust.observe(
-                SubjectType.AGENT,
+            self.trust.observe_agent(
                 agent,
+                principal,
                 TrustSignal.FIREWALL_FLAG,
                 rationale="Suspicious user input",
                 session_id=session_id,
@@ -239,8 +243,8 @@ class AgentRuntime:
 
         tool_policy = get_global_config().tool("search_documents")
         required = tool_policy.required_trust if tool_policy else None
-        decision = self.trust.evaluate(
-            SubjectType.AGENT, agent, required=required, action="search documents"
+        decision = self.trust.evaluate_agent(
+            agent, state.get("principal"), required=required, action="search documents"
         )
         if not decision.allowed:
             return {
@@ -314,7 +318,11 @@ class AgentRuntime:
         action = state["pending"]
         assert action is not None and action.tool is not None
         result = self.gateway.execute(
-            state["agent"], action.tool, action.arguments, session_id=state["session_id"]
+            state["agent"],
+            action.tool,
+            action.arguments,
+            session_id=state["session_id"],
+            principal=state.get("principal"),
         )
         status = {"EXECUTED": "executed", "DENIED": "denied", "PENDING": "pending"}.get(
             result.status.value, "failed"
@@ -403,11 +411,17 @@ class AgentRuntime:
         message: str,
         history: list[tuple[str, str]] | None = None,
         progress: Callable[[TraceEntry], None] | None = None,
+        principal: str | None = None,
     ) -> AgentTurn:
+        """Run one guarded turn. ``principal`` is who is driving the agent: trust
+        signals from the turn are charged to the agent's score with them."""
         started = time.perf_counter()
+        deadline = time.monotonic() + self.turn_timeout if self.turn_timeout else None
         final: AgentState = self.graph.invoke(
             {
                 "agent": agent,
+                "principal": principal,
+                "deadline": deadline,
                 "session_id": session_id,
                 "message": message,
                 "history": history or [],
@@ -441,4 +455,5 @@ def get_runtime() -> AgentRuntime:
         gateway=get_tool_gateway(),
         knowledge_base=get_knowledge_base(),
         max_steps=get_settings().agent_max_steps,
+        turn_timeout=get_settings().agent_turn_timeout,
     )

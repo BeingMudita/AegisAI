@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -22,8 +22,12 @@ _credentials_exc = HTTPException(
 )
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    """Resolve and validate the current user from the bearer token."""
+def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    """Resolve and validate the current user from the bearer token.
+
+    Sync on purpose: the user lookup may block on the database, and FastAPI runs
+    sync dependencies in a worker thread instead of on the event loop.
+    """
     token_data = decode_access_token(token)
     if token_data is None:
         raise _credentials_exc
@@ -53,8 +57,3 @@ def require_roles(*allowed: Role) -> Callable[[User], User]:
         return user
 
     return _guard
-
-
-def require_any(roles: Iterable[Role]) -> Callable[[User], User]:
-    """Same as :func:`require_roles` but takes an iterable."""
-    return require_roles(*roles)

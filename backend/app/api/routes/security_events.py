@@ -18,7 +18,7 @@ router = APIRouter(prefix="/security-events", tags=["security-events"])
 
 
 @router.get("")
-async def list_security_events(
+def list_security_events(
     event_type: SecurityEventType | None = None,
     severity: SecuritySeverity | None = None,
     agent: str | None = None,
@@ -38,7 +38,7 @@ async def list_security_events(
 
 
 @router.get("/summary", response_model=TelemetrySummary)
-async def summary(
+def summary(
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> TelemetrySummary:
     """Aggregate event and decision counts for the dashboard."""
@@ -46,7 +46,7 @@ async def summary(
 
 
 @router.delete("", status_code=204)
-async def clear_events(user: User = Depends(require_roles(Role.ADMIN))) -> None:
+def clear_events(user: User = Depends(require_roles(Role.ADMIN))) -> None:
     """Clear the in-memory audit buffer (ADMIN only).
 
     The durable (Postgres) audit log refuses: it is pruned only by retention.

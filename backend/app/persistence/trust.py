@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import ColumnElement, delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -51,7 +51,7 @@ def _summary(row: TrustScoreRow) -> TrustScore:
     )
 
 
-def _key(subject_type: SubjectType, subject_id: str):  # type: ignore[no-untyped-def]
+def _key(subject_type: SubjectType, subject_id: str) -> ColumnElement[bool]:
     return (TrustScoreRow.subject_type == subject_type) & (
         TrustScoreRow.subject_key == subject_id.lower()
     )
@@ -59,8 +59,18 @@ def _key(subject_type: SubjectType, subject_id: str):  # type: ignore[no-untyped
 
 class PostgresTrustRepository:
     def get_or_create(self, subject_type: SubjectType, subject_id: str, initial: float) -> float:
+        # Every gate reads trust, so the common case (the row exists) stays a plain
+        # SELECT; only a first sighting writes.
+        if (score := self.peek(subject_type, subject_id)) is not None:
+            return score
         with transaction() as db:
             _ensure(db, subject_type, subject_id, initial)
+            return db.execute(
+                select(TrustScoreRow.score).where(_key(subject_type, subject_id))
+            ).scalar_one()
+
+    def peek(self, subject_type: SubjectType, subject_id: str) -> float | None:
+        with transaction() as db:
             return db.scalar(select(TrustScoreRow.score).where(_key(subject_type, subject_id)))
 
     def update(

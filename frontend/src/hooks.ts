@@ -32,13 +32,20 @@ export function useApi<T>(path: string | null, intervalMs?: number) {
     }
   }, [path]);
 
+  // A new path starts over: drop the old data and fetch at once.
   useEffect(() => {
     setLoading(path !== null);
     setData(null);
     setError(null);
     void reload();
-    const id = intervalMs && path ? window.setInterval(() => { if (!document.hidden) void reload(); }, intervalMs) : undefined;
-    return () => { window.clearInterval(id); active.current?.abort(); active.current = null; };
+    return () => { active.current?.abort(); active.current = null; };
+  }, [path, reload]);
+
+  // Polling is separate, so speeding it up or slowing it down keeps the data on screen.
+  useEffect(() => {
+    if (!intervalMs || !path) return;
+    const id = window.setInterval(() => { if (!document.hidden) void reload(); }, intervalMs);
+    return () => window.clearInterval(id);
   }, [path, intervalMs, reload]);
 
   return { data, error, loading, reload };

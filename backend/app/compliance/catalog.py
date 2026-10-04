@@ -16,7 +16,18 @@ scenario evidence is checked live against the latest red-team run.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from app.compliance.schemas import Control, ThreatDef
+
+
+class FrameworkDef(TypedDict):
+    id: str
+    name: str
+    version: str
+    url: str
+    items: list[ThreatDef]
+
 
 CONTROLS: list[Control] = [
     Control(
@@ -36,7 +47,7 @@ CONTROLS: list[Control] = [
     Control(
         id="SPOTLIGHT",
         name="Data spotlighting",
-        description="Retrieved and tool text is wrapped in <data> tags and declared non-executable in LLM prompts.",
+        description="Retrieved and tool text is wrapped in <data> tags, HTML-escaped so it cannot close the tag, and declared non-executable in LLM prompts.",
         code=["backend/app/agents/brain.py"],
     ),
     Control(
@@ -49,14 +60,14 @@ CONTROLS: list[Control] = [
     Control(
         id="DOMAIN",
         name="Domain allow-lists",
-        description="URL and email arguments must target an approved domain (subdomains included).",
+        description="URL and email arguments must name exactly one destination (one https URL, one plain address) on an approved domain (subdomains included).",
         page="policies",
         code=["backend/app/tools/gateway.py"],
     ),
     Control(
         id="TRUST",
         name="Dynamic trust scoring",
-        description="Attacks and violations lower an agent's trust; every tool has a minimum; agents below 0.2 are suspended.",
+        description="Attacks and violations lower the agent's trust with the principal driving it, so one user can't suspend a shared agent for everyone; every tool has a minimum; below 0.2 the agent is suspended for that principal.",
         page="trust",
         code=["backend/app/trust/engine.py", "backend/app/trust/scoring.py"],
     ),
@@ -76,7 +87,7 @@ CONTROLS: list[Control] = [
     Control(
         id="DLP",
         name="Data-loss prevention",
-        description="Secrets are always redacted; PII is redacted when the agent's policy marks the data as sensitive.",
+        description="Secrets are always redacted; PII is redacted when the agent's policy marks the data as sensitive. Applies to tool output, answers, and the text an email or upload sends out.",
         code=["backend/app/firewall/dlp.py"],
     ),
     Control(
@@ -115,15 +126,21 @@ CONTROLS: list[Control] = [
     Control(
         id="ACCESS",
         name="Authenticated, role-based API",
-        description="JWT auth, three roles, ownership checks, login throttling, refusal to start with development secrets.",
+        description="JWT auth, three roles, ownership checks, login throttling per address and per account, refusal to start with development secrets.",
         code=["backend/app/auth/", "backend/app/main.py"],
     ),
     Control(
         id="REDTEAM",
         name="Continuous red-team evaluation",
-        description="Labelled attack suites run in CI as a security gate and on demand from the Red-team lab.",
+        description="Labelled attack suites run in CI as a security gate and on demand from the Red-team lab; a held-out set the rules were never tuned on is scored separately.",
         page="redteam",
         code=["backend/app/redteam/runner.py", "attack-scenarios/"],
+    ),
+    Control(
+        id="DEPENDENCIES",
+        name="Pinned and scanned dependencies",
+        description="Every runtime package is pinned with hashes in requirements.lock; CI checks Python and npm dependencies for known vulnerabilities; Dependabot proposes updates; container images are pinned.",
+        code=["backend/requirements.lock", ".github/workflows/ci.yml", ".github/dependabot.yml"],
     ),
 ]
 
@@ -146,7 +163,7 @@ OWASP_LLM_2025: list[ThreatDef] = [
             "scenario:AG-30",
             "scenario:AG-31",
         ],
-        residual="Signature detection misses paraphrased attacks without trigger words; the gateway limits what they can make an agent do.",
+        residual="Signature detection misses paraphrased attacks without trigger words (the Red-team lab's held-out set measures how many); the gateway limits what they can make an agent do.",
     ),
     ThreatDef(
         id="LLM02",
@@ -167,10 +184,10 @@ OWASP_LLM_2025: list[ThreatDef] = [
         id="LLM03",
         name="Supply Chain",
         description="Compromised models, datasets, packages or plugins.",
-        status="gap",
-        controls=["REDTEAM"],
+        status="partial",
+        controls=["DEPENDENCIES", "REDTEAM"],
         evidence=["test:backend/tests/test_evaluation.py"],
-        residual="Model, dataset and dependency provenance are outside the runtime layer. Add an SBOM, dependency scanning and model signature checks.",
+        residual="Python and npm packages are pinned and scanned, but there is no SBOM, and models pulled through Ollama or Hugging Face are not verified (no provenance or signature checks).",
     ),
     ThreatDef(
         id="LLM04",
@@ -351,7 +368,7 @@ MITRE_ATLAS: list[ThreatDef] = [
     ),
 ]
 
-FRAMEWORKS = [
+FRAMEWORKS: list[FrameworkDef] = [
     {
         "id": "owasp-llm-2025",
         "name": "OWASP Top 10 for LLM Applications",

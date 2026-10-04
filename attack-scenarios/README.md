@@ -26,6 +26,15 @@ names — so the false-positive rate is meaningful. A few malicious cases are
 paraphrases a signature layer is expected to miss; they stay in to keep the
 numbers honest.
 
+## `firewall_holdout.yaml` — 53 held-out inputs
+
+Same format (`HO-…` malicious, `HB-…` benign). The rules were tuned while looking at
+`firewall_cases.yaml`, so its scores are optimistic; this set was written afterwards —
+new phrasings of every attack family plus hard benign look-alikes — and is **never used
+for tuning**. Every run scores it separately; CI checks that it stays disjoint from the
+development set but sets no floor on it. If you change a rule because of a held-out
+case, move that case to `firewall_cases.yaml` and write a fresh one.
+
 ## `agent_scenarios.yaml` — 21 end-to-end scenarios
 
 Each scenario runs a full agent turn in a fresh, isolated runtime and asserts

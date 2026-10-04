@@ -10,9 +10,10 @@ by the current embedding model, so switching models can't mix vector spaces.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import CursorResult, delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.database.enums import TrustLevel
@@ -107,9 +108,8 @@ class PgVectorStore:
         if doc is None:
             return 0
         with transaction() as db:
-            return db.execute(
-                delete(DocumentChunk).where(DocumentChunk.document_id == doc)
-            ).rowcount
+            result = db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc))
+            return cast(CursorResult[Any], result).rowcount
 
     def chunks_of(self, document_id: str, limit: int = 50) -> list[StoredChunk]:
         doc = _doc_uuid(document_id)
@@ -151,6 +151,13 @@ class PgVectorStore:
                 or 0
             )
 
+    def save(self, directory: Path) -> None:
+        """Nothing to write: every change is already in the database."""
+
+    def load(self, directory: Path) -> bool:
+        """Nothing to read: the index lives in the database."""
+        return len(self) > 0
+
     def __len__(self) -> int:
         with transaction() as db:
             return (
@@ -190,6 +197,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
                     id=uuid.UUID(report.document_id),
                     source_id=self._source_id(db, report.source, report.trust_level),
                     title=report.title,
+                    content_hash=report.content_hash,
                     meta={**report.model_dump(mode="json"), "complete": False},
                 )
             )
@@ -236,12 +244,25 @@ class PostgresKnowledgeBase(KnowledgeBase):
             ).all()
             return [IngestReport.model_validate(d.meta) for d in rows]
 
+    def find_by_hash(self, content_hash: str) -> IngestReport | None:
+        with transaction() as db:
+            row = db.scalars(
+                select(Document)
+                .where(
+                    (Document.content_hash == content_hash)
+                    & (Document.meta["complete"].astext == "true")
+                )
+                .limit(1)
+            ).first()
+            return IngestReport.model_validate(row.meta) if row else None
+
     def remove_document(self, document_id: str) -> bool:
         doc = _doc_uuid(document_id)
         if doc is None:
             return False
         with transaction() as db:
-            return db.execute(delete(Document).where(Document.id == doc)).rowcount > 0
+            result = db.execute(delete(Document).where(Document.id == doc))
+            return cast(CursorResult[Any], result).rowcount > 0
 
     def quarantine(self) -> list[QuarantinedChunk]:
         query = (
@@ -314,7 +335,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
     def load(self) -> bool:
         """True when the database already holds documents (so nothing is re-seeded)."""
         with transaction() as db:
-            return db.scalar(select(func.count()).select_from(Document)) > 0
+            return (db.scalar(select(func.count()).select_from(Document)) or 0) > 0
 
     def seed_if_empty(self) -> None:
         """Seed the demo corpus once, even when several workers start together."""

@@ -80,12 +80,39 @@ _WORD = re.compile(r"\w+")
 
 @dataclass
 class NormalizedText:
+    """The canonical text, alternate readings of it, and where everything came from.
+
+    ``starts[i]`` / ``ends[i]`` give the slice of the *original* text that canonical
+    character ``i`` was produced from, so a span found in the canonical text can be
+    cut out of the original without disturbing the rest of it (line breaks, real
+    Cyrillic or Greek text, …). Each variant has a map from its characters to
+    canonical positions (``None`` = same positions), and each decoded payload
+    remembers the canonical span of the encoded token it came from.
+    """
+
     text: str
     variants: list[str] = field(default_factory=list)
     decoded_payloads: list[str] = field(default_factory=list)
     invisible_count: int = 0
     homoglyph_count: int = 0
     spaced_letter_runs: int = 0
+    starts: list[int] = field(default_factory=list)
+    ends: list[int] = field(default_factory=list)
+    variant_maps: list[list[int] | None] = field(default_factory=list)
+    payload_spans: list[tuple[int, int]] = field(default_factory=list)
+
+    def variant_span(self, variant: int, start: int, end: int) -> tuple[int, int]:
+        """The canonical span of ``[start, end)`` in variant number ``variant``."""
+        mapping = self.variant_maps[variant]
+        if mapping is None or end <= start:
+            return start, end
+        return mapping[start], mapping[end - 1] + 1
+
+    def original_span(self, start: int, end: int) -> tuple[int, int]:
+        """The slice of the original text behind canonical ``[start, end)``."""
+        if end <= start:
+            return (self.starts[start], self.starts[start]) if start < len(self.starts) else (0, 0)
+        return self.starts[start], self.ends[end - 1]
 
 
 def _decode_base64(token: str) -> str | None:
@@ -101,11 +128,59 @@ def _decode_base64(token: str) -> str | None:
     return decoded
 
 
+def strip_invisible(text: str) -> str:
+    """Remove zero-width, soft-hyphen, BOM and bidi-control characters."""
+    return _INVISIBLE.sub("", text)
+
+
+# (character, start, end): a character and the slice of the original text it came from.
+_Piece = tuple[str, int, int]
+
+
+def _clusters(text: str) -> list[tuple[str, int, int]]:
+    """Visible characters grouped with the combining marks that follow them, with
+    their original span. Invisible characters are dropped here; ``sanitize`` strips
+    them from the text it keeps as well."""
+    clusters: list[tuple[str, int, int]] = []
+    for i, ch in enumerate(text):
+        if _INVISIBLE.match(ch):
+            continue
+        if clusters and unicodedata.combining(ch):
+            chars, start, _ = clusters[-1]
+            clusters[-1] = (chars + ch, start, i + 1)
+        else:
+            clusters.append((ch, i, i + 1))
+    return clusters
+
+
+def _squash_spaced(canonical: str) -> tuple[str, list[int]]:
+    """Join letters spelled out with separators ("i g n o r e" → "ignore"), keeping
+    a map from each output character to its canonical position."""
+    out: list[str] = []
+    mapping: list[int] = []
+    last = 0
+    for match in _SPACED_LETTERS.finditer(canonical):
+        out.append(canonical[last : match.start()])
+        mapping.extend(range(last, match.start()))
+        for j in range(match.start(), match.end()):
+            if canonical[j] not in " .-_":
+                out.append(canonical[j])
+                mapping.append(j)
+        last = match.end()
+    out.append(canonical[last:])
+    mapping.extend(range(last, len(canonical)))
+    return "".join(out), mapping
+
+
 def normalize(text: str) -> NormalizedText:
     """Canonicalize ``text`` and collect alternate readings worth scanning."""
     invisible_count = len(_INVISIBLE.findall(text))
-    cleaned = _INVISIBLE.sub("", text)
-    cleaned = unicodedata.normalize("NFKC", cleaned)
+
+    # NFKC per character cluster, so every output character knows its source span.
+    pieces: list[_Piece] = []
+    for chars, start, end in _clusters(text):
+        pieces.extend((ch, start, end) for ch in unicodedata.normalize("NFKC", chars))
+    cleaned = "".join(ch for ch, _, _ in pieces)
 
     # Only *mixed-script* words count: genuine Cyrillic/Greek prose is fine.
     homoglyph_count = sum(
@@ -113,24 +188,43 @@ def normalize(text: str) -> NormalizedText:
         for word in _WORD.findall(cleaned)
         if any(ch in _CONFUSABLE_CHARS for ch in word) and re.search(r"[A-Za-z]", word)
     )
-    cleaned = cleaned.translate(_CONFUSABLES)
-
+    cleaned = cleaned.translate(_CONFUSABLES)  # one character for one: spans are kept
+    pieces = [(cleaned[k], s, e) for k, (_, s, e) in enumerate(pieces)]
     spaced_runs = _SPACED_LETTERS.findall(cleaned)
-    canonical = _WHITESPACE.sub(" ", cleaned).strip()
+
+    # Collapse whitespace runs to one space (spanning the whole run) and trim.
+    canonical_pieces: list[_Piece] = []
+    for ch, start, end in pieces:
+        if ch.isspace():
+            if canonical_pieces and canonical_pieces[-1][0] == " ":
+                canonical_pieces[-1] = (" ", canonical_pieces[-1][1], end)
+                continue
+            ch = " "
+        canonical_pieces.append((ch, start, end))
+    while canonical_pieces and canonical_pieces[0][0] == " ":
+        canonical_pieces.pop(0)
+    while canonical_pieces and canonical_pieces[-1][0] == " ":
+        canonical_pieces.pop()
+    canonical = "".join(ch for ch, _, _ in canonical_pieces)
 
     variants: list[str] = []
-    deleeted = canonical.translate(_LEET)
+    variant_maps: list[list[int] | None] = []
+    deleeted = canonical.translate(_LEET)  # one character for one
     if deleeted != canonical:
         variants.append(deleeted)
+        variant_maps.append(None)
     if spaced_runs:
-        squashed = _SPACED_LETTERS.sub(lambda m: re.sub(r"[ .\-_]", "", m.group(0)), canonical)
+        squashed, mapping = _squash_spaced(canonical)
         variants.append(squashed)
+        variant_maps.append(mapping)
 
     decoded_payloads: list[str] = []
-    for token in _BASE64_TOKEN.findall(canonical):
-        decoded = _decode_base64(token)
+    payload_spans: list[tuple[int, int]] = []
+    for token in _BASE64_TOKEN.finditer(canonical):
+        decoded = _decode_base64(token.group(0))
         if decoded:
             decoded_payloads.append(_WHITESPACE.sub(" ", decoded).strip())
+            payload_spans.append((token.start(), token.end()))
 
     return NormalizedText(
         text=canonical,
@@ -139,4 +233,8 @@ def normalize(text: str) -> NormalizedText:
         invisible_count=invisible_count,
         homoglyph_count=homoglyph_count,
         spaced_letter_runs=len(spaced_runs),
+        starts=[s for _, s, _ in canonical_pieces],
+        ends=[e for _, _, e in canonical_pieces],
+        variant_maps=variant_maps,
+        payload_spans=payload_spans,
     )

@@ -35,6 +35,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         await run_in_threadpool(seed_reference_data)
     yield
+    # Decision counters are buffered per worker; write what's left before exiting.
+    from app.telemetry.store import get_audit_log
+
+    await run_in_threadpool(get_audit_log().flush)
 
 
 app = FastAPI(

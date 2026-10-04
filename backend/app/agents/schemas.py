@@ -37,6 +37,7 @@ class TurnContext:
     context: list[RetrievedChunk] = field(default_factory=list)
     steps: list[ToolCallResult] = field(default_factory=list)
     history: list[tuple[str, str]] = field(default_factory=list)
+    deadline: float | None = None  # time.monotonic() by which the turn must finish
 
 
 class TraceEntry(BaseModel):

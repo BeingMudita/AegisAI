@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.auth.dependencies import require_roles
 from app.auth.roles import STAFF_ROLES
 from app.auth.schemas import User
-from app.redteam.runner import load_agent_scenarios, load_firewall_cases
+from app.redteam.runner import load_agent_scenarios, load_firewall_cases, load_holdout_cases
 from app.redteam.schemas import RedTeamRun, RunRequest, RunSummary
 from app.redteam.service import RunConflict, get_redteam_service
 
@@ -24,12 +24,14 @@ router = APIRouter(prefix="/redteam", tags=["red-team"])
 def suites(user: User = Depends(require_roles(*STAFF_ROLES))) -> dict:
     """What a run will execute."""
     cases = load_firewall_cases()
+    holdout = load_holdout_cases()
     scenarios = load_agent_scenarios()
     return {
         "firewall": {
             "cases": len(cases),
             "malicious": sum(bool(c["malicious"]) for c in cases),
             "categories": dict(sorted(Counter(c["category"] for c in cases).items())),
+            "holdout_cases": len(holdout),
         },
         "agents": {
             "scenarios": len(scenarios),
