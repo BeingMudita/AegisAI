@@ -160,7 +160,7 @@ export function Card({
   bodyClassName?: string;
 }) {
   return (
-    <section className={`flex min-w-0 flex-col rounded-2xl border border-edge bg-surface p-5 shadow-card ${className}`}>
+    <section className={`flex min-w-0 flex-col rounded-xl border border-edge bg-surface p-5 shadow-card ${className}`}>
       {(title || actions) && (
         <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-start gap-3">
@@ -192,12 +192,12 @@ export function StatTile({
   tone?: Tone;
 }) {
   return (
-    <div className="flex min-w-0 items-start gap-3 rounded-2xl border border-edge bg-surface p-4 shadow-card">
+    <div className="flex min-w-0 items-start gap-3 rounded-xl border border-edge bg-surface p-4 shadow-card">
       {icon && <IconTile icon={icon} tone={tone} />}
       <div className="min-w-0">
-        <div className="truncate text-xs font-medium text-ink-2">{label}</div>
+        <div className="text-xs font-medium text-ink-2">{label}</div>
         <div className="mt-0.5 text-2xl font-semibold tracking-tight text-ink">{value}</div>
-        {note && <div className="mt-0.5 truncate text-xs text-muted">{note}</div>}
+        {note && <div className="mt-1 text-xs leading-relaxed text-muted">{note}</div>}
       </div>
     </div>
   );

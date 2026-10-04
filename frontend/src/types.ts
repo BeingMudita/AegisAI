@@ -254,6 +254,15 @@ export interface AgentTurn {
   created_at: string;
 }
 
+export interface RunProgress {
+  request_id: string;
+  status: "running" | "completed" | "blocked" | "failed";
+  current_stage: string | null;
+  stages: TraceEntry[];
+  started_at: string;
+  finished_at: string | null;
+}
+
 export interface SessionSummary {
   id: string;
   agent: string;

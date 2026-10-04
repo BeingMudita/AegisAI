@@ -6,9 +6,16 @@ AegisAI wraps LLM-powered agent systems in a defensive perimeter — a prompt-in
 firewall, a per-tool trust engine, policy enforcement, and full telemetry — so that
 autonomous agents can use tools and knowledge safely, even under adversarial input.
 
-> Status: **Phases 0–8 implemented** — backend, dashboard, red-team evaluation and
-> deployment configs. State is held in in-memory stores for now; moving it onto the
-> PostgreSQL schema is the main remaining step (see [Roadmap](#️-roadmap)).
+> Status: **Phases 0–9 implemented** — backend, dashboard, red-team evaluation,
+> deployment configs and **durable PostgreSQL + pgvector storage** shared by several
+> API workers (`STORAGE_BACKEND=postgres`). Development still defaults to in-memory
+> stores. See the [Roadmap](#️-roadmap) for what's next.
+
+**Workspace update (2026-10-02):** a guided operations dashboard, interactive
+architecture map, actual agent-stage progress, conversation recovery and evidence
+exports, plus session concurrency protection and login throttling. See
+[CHANGELOG.md](CHANGELOG.md) for the full change record and validation results, and
+[the operator guide](docs/operator-guide.md) for a practical review workflow.
 
 ---
 
@@ -25,7 +32,7 @@ Every request, retrieved document and tool call passes through these checkpoints
 | **RAG** | Paragraph-level chunks screened at ingestion (injected chunks quarantined, their source penalized) and again at retrieval; untrusted or degraded sources are dropped. |
 | **Agents** | A LangGraph workflow (`guard_input → retrieve → plan ⇄ act → respond → guard_output`). The brain is Ollama when available, else a deterministic rule-based planner. |
 | **Telemetry** | Every decision is counted and every incident recorded as a security event with structured logs. |
-| **Dashboard** | React console: overview charts, agent chat with a per-turn security trace, firewall lab, trust history, event log, knowledge base and policies. |
+| **Dashboard** | Guided workspace, interactive architecture map, live agent-stage monitor, conversation history and evidence export, overview charts, firewall lab, trust history, event log, knowledge base and policies. |
 
 ---
 
@@ -56,7 +63,7 @@ AegisAI/
 │   │   ├── telemetry/    # Audit log and structured logging
 │   │   └── database/     # Models, sessions, migrations
 │   ├── data/             # inbox/ (drop files here), uploads/, index/ — git-ignored
-│   └── tests/            # 133 tests, incl. the red-team security gate
+│   └── tests/            # Regression tests, incl. the red-team security gate
 ├── frontend/             # React + Vite dashboard
 ├── attack-scenarios/     # Red-team suites (73 firewall cases, 21 agent scenarios)
 ├── evaluation/           # Benchmark harness and report
@@ -106,16 +113,37 @@ npm run dev
 
 Open http://localhost:5173 and sign in with a development account
 (`admin / admin123`, `analyst / analyst123`, `agent / agent123`).
+The account shortcuts appear only in the Vite development server. Production
+builds require manually entered deployment credentials.
 
 ### 4. Full stack via Docker
 ```bash
 docker compose -f docker/docker-compose.yml up --build                 # dashboard on :8080
 docker compose -f docker/docker-compose.yml --profile llm up --build   # + Ollama
 ```
+The compose stack runs on PostgreSQL + pgvector with two API workers; the database
+is migrated and seeded automatically on start.
+
+### Storage: memory or PostgreSQL
+
+| `STORAGE_BACKEND` | State lives in | Use for |
+|---|---|---|
+| `memory` (default) | the API process (knowledge base optionally saved to `backend/data/index/`) | development, one worker |
+| `postgres` | `DATABASE_URL`: events, trust, sessions and turns, tool requests, users, policies, the pgvector knowledge base, ingestion jobs, rate limits | durable, multi-worker deployments |
+
+To run locally against your own Postgres (with the `vector` extension available):
+```bash
+cd backend
+set STORAGE_BACKEND=postgres           # macOS/Linux: export STORAGE_BACKEND=postgres
+python -m app.database.migrate --seed  # create/upgrade the schema, seed accounts and policies
+uvicorn app.main:app --workers 2
+```
 
 ### 5. Tests & evaluation
 ```bash
 cd backend && pytest -q                      # unit, API and red-team gate tests
+AEGIS_TEST_POSTGRES=1 pytest -q              # same suite on embedded PostgreSQL + pgvector,
+                                             # plus cross-worker tests (requirements-dev.txt)
 cd .. && backend/.venv/bin/python evaluation/run_eval.py   # Windows: backend\.venv\Scripts\python
 ```
 
@@ -123,7 +151,7 @@ cd .. && backend/.venv/bin/python evaluation/run_eval.py   # Windows: backend\.v
 
 ## 📂 Adding your own data
 
-Open **Data & RAG** in the dashboard (signed in as `admin`). There are three ways in:
+Open **Knowledge base** in the dashboard (signed in as `admin`). There are three ways in:
 
 | Way | Best for |
 |---|---|
@@ -143,7 +171,9 @@ in [`sample-data/`](sample-data/README.md); three of them hide injections.
 
 ## 🎯 Try it
 
-In the dashboard's **Agent console**, pick an example — or type your own:
+In the dashboard's **Agent workspace**, pick an example to fill a draft, then press
+**Send** — or type your own. The execution monitor shows server-reported stages;
+fast runs may complete between polls, with the final security trace providing the evidence.
 
 | Request | What AegisAI does |
 |---|---|
@@ -156,6 +186,12 @@ In the dashboard's **Agent console**, pick an example — or type your own:
 
 Repeat a few attacks and the agent loses access to its data tools — the overview and
 trust pages show the decline as it happens.
+
+Use **Conversation history** to resume a conversation while the server remains
+running. **Reload conversation** recovers its state after a connection failure.
+Export conversation evidence or up to 200 filtered security events as JSON for
+review. These exports can contain original messages and event details; handle
+them according to your organization's data rules.
 
 ---
 
@@ -182,6 +218,12 @@ Never commit `.env`, API keys, database passwords, or JWT secrets.
 Use `.env.example` as the template; the real `.env` is git-ignored.
 With `ENVIRONMENT=production` the API **refuses to start** while `JWT_SECRET` or any
 `SEED_*_PASSWORD` is still at its development default.
+Login attempts are limited to 10 per minute per ASGI client address, with
+`429` / `Retry-After` responses. This limiter, session exclusivity, and request-ID
+replay protection are process-local. Use a single API worker until shared state
+and distributed locking are implemented; place shared throttling at the production
+edge and configure trusted proxies explicitly. API responses use `Cache-Control:
+no-store` and defensive browser headers.
 
 ---
 
@@ -207,8 +249,12 @@ With `ENVIRONMENT=production` the API **refuses to start** while `JWT_SECRET` or
 - [x] **Phase 6** — Frontend dashboard
 - [x] **Phase 7** — Attack scenarios & evaluation
 - [x] **Phase 8** — Deployment (Docker, Render, Vercel, CI)
-- [ ] **Next** — Persist users, policies, sessions, events, trust and embeddings in PostgreSQL / pgvector
-  (schema exists; stores are in-memory today) · ML-based injection classifier for paraphrased attacks
+- [x] **Phase 9** — Durable PostgreSQL + pgvector storage: Alembic migrations, transactional stores,
+  cross-worker session locks with leases, shared request-ID replay rejection, shared rate limits
+- [ ] **Phase 10** — Retention and quotas: audit retention, session expiry, pagination, per-principal quotas
+- [ ] **Phase 11** — Human approval workflow for high-impact tool actions
+- [ ] **Phase 12** — Paraphrased red-team suite, then a semantic injection detector
+- [ ] **Later** — Organization identity (SSO/OIDC) and tenant isolation
 
 ---
 

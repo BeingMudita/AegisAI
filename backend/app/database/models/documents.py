@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,9 +82,7 @@ class DocumentChunk(Base, TimestampMixin):
         back_populates="chunk", cascade="all, delete-orphan", uselist=False
     )
 
-    __table_args__ = (
-        UniqueConstraint("document_id", "chunk_index", name="uq_chunk_doc_index"),
-    )
+    __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_chunk_doc_index"),)
 
 
 class Embedding(Base, TimestampMixin):
@@ -89,3 +98,26 @@ class Embedding(Base, TimestampMixin):
     vector: Mapped[list[float]] = mapped_column(Vector(_EMBEDDING_DIM))
 
     chunk: Mapped["DocumentChunk"] = relationship(back_populates="embedding")
+
+    __table_args__ = (
+        # Approximate nearest-neighbour index for cosine similarity search.
+        Index(
+            "ix_embeddings_vector_hnsw",
+            "vector",
+            postgresql_using="hnsw",
+            postgresql_ops={"vector": "vector_cosine_ops"},
+        ),
+    )
+
+
+class IngestJobRow(Base):
+    """An ingestion job's latest state, so every API worker can report its progress."""
+
+    __tablename__ = "ingest_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(16), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )

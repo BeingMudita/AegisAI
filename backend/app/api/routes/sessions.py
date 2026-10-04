@@ -15,12 +15,12 @@ from app.agents.schemas import (
     AgentTurn,
     CreateSessionRequest,
     MessageRequest,
+    RunProgress,
 )
 from app.agents.sessions import get_session_store
 from app.auth.dependencies import get_current_user
 from app.auth.roles import STAFF_ROLES
 from app.auth.schemas import User
-from app.database.enums import SessionStatus
 from app.policies.store import get_policy
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -79,14 +79,33 @@ def send_message(
     on the LLM.
     """
     session = _owned_session(session_id, user)
-    if session.status != SessionStatus.ACTIVE:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Session is closed.")
-    history = [(t.message, t.answer) for t in session.turns if not t.blocked]
-    turn = get_runtime().run_turn(
-        agent=session.agent, session_id=session.id, message=body.message, history=history
-    )
-    get_session_store().add_turn(session.id, turn)
-    return turn
+    store = get_session_store()
+    try:
+        store.begin_turn(session.id, str(body.request_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    turn = None
+    try:
+        history = [(t.message, t.answer) for t in session.turns if not t.blocked]
+        turn = get_runtime().run_turn(
+            agent=session.agent,
+            session_id=session.id,
+            message=body.message,
+            history=history,
+            progress=lambda entry: store.report_progress(session.id, entry),
+        )
+        return turn
+    finally:
+        store.finish_turn(session.id, turn)
+
+
+@router.get("/{session_id}/progress", response_model=RunProgress | None)
+async def run_progress(
+    session_id: str, user: User = Depends(get_current_user)
+) -> RunProgress | None:
+    """Owner/staff-visible progress, using actual graph node boundaries."""
+    _owned_session(session_id, user)
+    return get_session_store().progress(session_id)
 
 
 @router.post("/{session_id}/close", response_model=AgentSessionRecord)
@@ -95,6 +114,9 @@ async def close_session(
 ) -> AgentSessionRecord:
     """Close a session; further messages are refused."""
     _owned_session(session_id, user)
-    closed = get_session_store().close(session_id)
+    try:
+        closed = get_session_store().close(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     assert closed is not None
     return closed

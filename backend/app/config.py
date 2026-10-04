@@ -44,6 +44,14 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://aegis:aegis@localhost:5432/aegisai"
+    # "memory" keeps operational state in-process (development, tests).
+    # "postgres" persists events, trust, sessions, tool requests, users, policies
+    # and the knowledge base in DATABASE_URL, so several API workers share state.
+    storage_backend: str = "memory"  # memory | postgres
+    db_pool_size: int = 10
+    # A turn's session lock expires after this, so a crashed worker can't hold a
+    # session forever.
+    session_lease_seconds: int = 300
 
     # Security
     jwt_secret: str = Field(
@@ -104,6 +112,21 @@ class Settings(BaseSettings):
         path = base.joinpath(*parts)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def use_postgres(self) -> bool:
+        return self.storage_backend.lower() == "postgres"
+
+    @property
+    def sync_database_url(self) -> str:
+        """DATABASE_URL for the synchronous (psycopg2) driver used by the stores."""
+        url = self.database_url
+        for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgres://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg2://" + url[len(prefix) :]
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg2://" + url[len("postgresql://") :]
+        return url
 
     @property
     def cors_origin_list(self) -> list[str]:

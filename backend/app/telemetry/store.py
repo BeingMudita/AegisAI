@@ -1,9 +1,10 @@
 """Audit log — records every checkpoint decision and security event.
 
-Events are kept in a bounded in-memory buffer (newest last) and mirrored to
-structured logs. Like the policy store, this is the interim backing store;
-the ``security_events`` table becomes the persistent sink later, and callers
-only ever talk to :class:`AuditLog`, so they won't change when it does.
+:class:`AuditLog` keeps events in a bounded in-memory buffer (newest last) and
+mirrors them to structured logs. With ``STORAGE_BACKEND=postgres`` the
+``security_events`` and ``decision_counters`` tables are the durable sink instead
+(:class:`app.persistence.audit.PostgresAuditLog`); callers only ever talk to the
+``AuditLog`` interface, so they don't change.
 """
 
 from __future__ import annotations
@@ -52,8 +53,7 @@ class AuditLog:
             session_id=session_id,
             details=details or {},
         )
-        with self._lock:
-            self._events.append(event)
+        self._store_event(event)
         logger.warning(
             "security_event",
             event_type=event_type.value,
@@ -74,9 +74,7 @@ class AuditLog:
         reason: str | None = None,
     ) -> None:
         """Count (and log) a single allow/deny decision made by ``component``."""
-        with self._lock:
-            counter = self._decisions.setdefault(component, Counter())
-            counter["allowed" if allowed else "denied"] += 1
+        self.count_decisions(component, allowed=int(allowed), denied=int(not allowed))
         logger.info(
             "decision",
             component=component,
@@ -85,6 +83,10 @@ class AuditLog:
             agent=agent,
             reason=reason,
         )
+
+    def _store_event(self, event: SecurityEventRecord) -> None:
+        with self._lock:
+            self._events.append(event)
 
     def count_decisions(self, component: str, *, allowed: int = 0, denied: int = 0) -> None:
         """Add many decisions at once (bulk ingestion) without per-item log lines."""
@@ -148,5 +150,10 @@ class AuditLog:
 
 @lru_cache
 def get_audit_log() -> AuditLog:
-    """Return the process-wide audit log."""
-    return AuditLog(max_events=get_settings().audit_buffer_size)
+    """Return the process-wide audit log (durable in Postgres mode)."""
+    settings = get_settings()
+    if settings.use_postgres:
+        from app.persistence.audit import PostgresAuditLog
+
+        return PostgresAuditLog()
+    return AuditLog(max_events=settings.audit_buffer_size)
