@@ -5,3 +5,5 @@ httpx>=0.27
 ruff>=0.7
 mypy>=1.11
 reportlab>=4.0   # sample-data (PDF) generation
+# Embedded PostgreSQL + pgvector for `AEGIS_TEST_POSTGRES=1 pytest`
+pgserver>=0.1.4

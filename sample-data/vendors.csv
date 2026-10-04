@@ -1,0 +1,9 @@
+vendor,category,payment_terms,contact,annual_spend_usd,status
+Globex Logistics,Shipping,net 30,ap@globex.example,412000,active
+Initech Software,Licenses,net 45,billing@initech.example,96000,active
+Umbrella Supplies,Office supplies,net 30,orders@umbrella.example,18500,active
+Stark Facilities,Cleaning,net 15,finance@stark.example,54000,under review
+Wayne Catering,Catering,net 30,events@wayne.example,23000,active
+Acme Hardware,Equipment,net 60,sales@acme.example,138000,active
+Hooli Cloud,Hosting,net 30,invoices@hooli.example,265000,active
+Vandelay Imports,Raw materials,net 45,art@vandelay.example,77000,suspended

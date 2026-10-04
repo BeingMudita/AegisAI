@@ -1,0 +1,7 @@
+# ---------------------------------------------------------------------------
+# Optional ML extras — real semantic embeddings.
+#   pip install -r requirements.txt -r requirements-ml.txt
+# Pulls in PyTorch (~2 GB). When installed, EMBEDDING_BACKEND=auto picks
+# sentence-transformers automatically; otherwise the hashing embedder is used.
+# ---------------------------------------------------------------------------
+sentence-transformers>=3.0

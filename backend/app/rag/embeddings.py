@@ -1,119 +1,109 @@
-"""Embedding providers.
+"""Text embedders.
 
-The default provider uses Sentence-Transformers (the model named by
-EMBEDDING_MODEL). When that library/model isn't available — e.g. in CI or a
-lightweight dev box — we fall back to a deterministic hashing embedder so the
-pipeline still runs end-to-end. The fallback is NOT semantically meaningful;
-it exists only to keep the plumbing testable offline.
+``SentenceTransformerEmbedder`` is the real model (``EMBEDDING_MODEL``).
+``HashingEmbedder`` is a dependency-free fallback — signed feature hashing of
+word unigrams and bigrams — so the RAG pipeline runs (and is testable) on
+machines without PyTorch. Both return L2-normalized vectors of
+``EMBEDDING_DIM`` dimensions, so cosine similarity is a dot product.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
+import re
 from functools import lru_cache
 from typing import Protocol
 
+import structlog
+
 from app.config import get_settings
 
-settings = get_settings()
+logger = structlog.get_logger("aegisai.rag")
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset(
+    (  # noqa: SIM905 — a word string is far more readable than a 50-item list
+        "a an and are as at be by can do does for from has have how i in is it its me my "
+        "of on or our please show tell that the their them there these this to us was we "
+        "what when where which who why will with you your"
+    ).split()
+)
 
 
-class EmbeddingProvider(Protocol):
-    """Anything that turns text into fixed-length vectors."""
+class Embedder(Protocol):
+    name: str
+    dim: int
 
-    @property
-    def dim(self) -> int: ...
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
 
-    @property
-    def model_name(self) -> str: ...
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]: ...
+def _normalize(vec: list[float]) -> list[float]:
+    norm = math.sqrt(sum(v * v for v in vec))
+    return [v / norm for v in vec] if norm else vec
 
-    def embed_text(self, text: str) -> list[float]: ...
+
+class HashingEmbedder:
+    """Deterministic bag-of-words embedder using signed feature hashing."""
+
+    def __init__(self, dim: int = 384) -> None:
+        self.dim = dim
+        self.name = f"hashing-{dim}"
+
+    @staticmethod
+    def _tokens(text: str) -> list[str]:
+        words = [w for w in _TOKEN.findall(text.lower()) if w not in _STOPWORDS]
+        # crude stemming so "invoices" matches "invoice"
+        words = [
+            w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in words
+        ]
+        return words + [f"{a}_{b}" for a, b in zip(words, words[1:], strict=False)]
+
+    def _embed_one(self, text: str) -> list[float]:
+        vec = [0.0] * self.dim
+        for tok in self._tokens(text):
+            h = int.from_bytes(hashlib.blake2b(tok.encode(), digest_size=8).digest(), "little")
+            idx = h % self.dim
+            sign = 1.0 if (h >> 63) & 1 else -1.0
+            vec[idx] += sign * (0.5 if "_" in tok else 1.0)
+        return _normalize(vec)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(t) for t in texts]
 
 
 class SentenceTransformerEmbedder:
-    """Real semantic embeddings via sentence-transformers."""
+    """Wraps a sentence-transformers model (loaded lazily on first use)."""
 
-    def __init__(self, model_name: str, expected_dim: int) -> None:
-        from sentence_transformers import SentenceTransformer
+    def __init__(self, model_name: str, dim: int) -> None:
+        self.name = model_name
+        self.dim = dim
+        self._model = None
 
-        self._model = SentenceTransformer(model_name)
-        self._model_name = model_name
-        self._dim = self._model.get_sentence_embedding_dimension()
-        if self._dim != expected_dim:
-            raise ValueError(
-                f"EMBEDDING_DIM={expected_dim} does not match model dim {self._dim}. "
-                f"Update EMBEDDING_DIM in your .env to {self._dim}."
-            )
+    def _load(self):  # type: ignore[no-untyped-def]
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
 
-    @property
-    def dim(self) -> int:
-        return self._dim
+            self._model = SentenceTransformer(self.name)
+        return self._model
 
-    @property
-    def model_name(self) -> str:
-        return self._model_name
-
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        vectors = self._model.encode(
-            texts, normalize_embeddings=True, convert_to_numpy=True
-        )
-        return [v.tolist() for v in vectors]
-
-    def embed_text(self, text: str) -> list[float]:
-        return self.embed_batch([text])[0]
-
-
-class HashEmbedder:
-    """Deterministic offline fallback embedder (bag-of-words hashing).
-
-    Not semantic — for plumbing/tests only. Produces L2-normalized vectors of
-    the configured dimension so pgvector cosine distance behaves sanely.
-    """
-
-    def __init__(self, dim: int) -> None:
-        self._dim = dim
-
-    @property
-    def dim(self) -> int:
-        return self._dim
-
-    @property
-    def model_name(self) -> str:
-        return f"hash-fallback-{self._dim}"
-
-    def embed_text(self, text: str) -> list[float]:
-        vec = [0.0] * self._dim
-        for token in text.lower().split():
-            h = int(hashlib.md5(token.encode("utf-8")).hexdigest(), 16)
-            idx = h % self._dim
-            sign = 1.0 if (h >> 7) & 1 else -1.0
-            vec[idx] += sign
-        norm = math.sqrt(sum(x * x for x in vec))
-        if norm > 0:
-            vec = [x / norm for x in vec]
-        return vec
-
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed_text(t) for t in texts]
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._load().encode(texts, normalize_embeddings=True)
+        return [list(map(float, v)) for v in vectors]
 
 
 @lru_cache
-def get_embedder() -> EmbeddingProvider:
-    """Return the configured embedder, falling back to hashing if unavailable."""
-    try:
-        return SentenceTransformerEmbedder(
-            settings.embedding_model, settings.embedding_dim
-        )
-    except Exception as exc:  # noqa: BLE001 - intentional broad fallback
-        import warnings
+def get_embedder() -> Embedder:
+    """Pick the embedder named by ``EMBEDDING_BACKEND`` (auto falls back to hashing)."""
+    settings = get_settings()
+    backend = settings.embedding_backend.lower()
+    if backend in {"auto", "sentence_transformers"}:
+        try:
+            import sentence_transformers  # noqa: F401
 
-        warnings.warn(
-            f"Falling back to HashEmbedder (sentence-transformers unavailable: {exc}). "
-            "Retrieval quality will be poor; install sentence-transformers for real use.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return HashEmbedder(settings.embedding_dim)
+            return SentenceTransformerEmbedder(settings.embedding_model, settings.embedding_dim)
+        except ImportError:
+            if backend == "sentence_transformers":
+                raise
+            logger.warning("sentence_transformers_unavailable", fallback="hashing")
+    return HashingEmbedder(settings.embedding_dim)

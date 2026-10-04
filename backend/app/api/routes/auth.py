@@ -2,24 +2,35 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.auth.dependencies import get_current_user
+from app.auth.limiter import login_limiter
 from app.auth.schemas import Token, User
-from app.auth.security import create_access_token, verify_password
+from app.auth.security import create_access_token, hash_password, verify_password
 from app.auth.users import get_user
 from app.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
+_DUMMY_HASH = hash_password("unknown-account-timing-placeholder")
 
 
 @router.post("/login", response_model=Token)
-async def login(form: OAuth2PasswordRequestForm = Depends()) -> Token:
+def login(request: Request, form: OAuth2PasswordRequestForm = Depends()) -> Token:
     """Exchange username/password for a JWT bearer token."""
+    # Trust only the ASGI peer, never a caller-provided forwarding header here.
+    peer = request.client.host if request.client else "unknown"
+    if retry_after := login_limiter.retry_after(peer):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many sign-in attempts. Try again shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
     user = get_user(form.username)
-    if user is None or not verify_password(form.password, user.hashed_password):
+    valid = verify_password(form.password, user.hashed_password if user else _DUMMY_HASH)
+    if user is None or not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
