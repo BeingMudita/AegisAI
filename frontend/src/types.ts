@@ -109,6 +109,12 @@ export interface ToolCall {
   output_action: FirewallAction | null;
   redactions: Record<string, number>;
   requested_at: string;
+  decided_at?: string | null;
+  session_id?: string | null;
+  expires_at?: string | null;
+  reviewed_by?: string | null;
+  review_note?: string | null;
+  reviewed_at?: string | null;
 }
 
 export interface ToolInfo {
@@ -121,6 +127,7 @@ export interface ToolInfo {
   data_category: string | null;
   parameters: Record<string, string>;
   domain_checked_argument: string | null;
+  requires_approval?: boolean;
 }
 
 export interface RetrievedChunk {
@@ -288,4 +295,152 @@ export interface AgentPolicy {
   blocked_tools: string[];
   allowed_domains: string[];
   sensitive_data: string[];
+}
+
+// ---------------------------------------------------------------- approvals
+export interface ApprovalQueue {
+  pending: ToolCall[];
+  recent: ToolCall[];
+  ttl_minutes: number;
+}
+
+// ----------------------------------------------------------------- red team
+export type Suite = "firewall" | "agents";
+
+export interface CaseResult {
+  id: string;
+  category: string;
+  channel: Channel;
+  malicious: boolean;
+  action: FirewallAction;
+  score: number;
+  rules: string[];
+  detected: boolean;
+  correct: boolean;
+  latency_ms: number;
+  text: string;
+}
+
+export interface CategoryStat {
+  category: string;
+  n: number;
+  detected: number;
+  blocked: number;
+  detection_rate: number;
+}
+
+export interface FirewallReport {
+  cases: number;
+  malicious: number;
+  benign: number;
+  confusion: { tp: number; fp: number; tn: number; fn: number };
+  precision: number;
+  recall: number;
+  f1: number;
+  false_positive_rate: number;
+  block_rate_malicious: number;
+  block_rate_benign: number;
+  latency_ms: { p50: number; p95: number; max: number };
+  by_category: CategoryStat[];
+  results: CaseResult[];
+  misses: CaseResult[];
+  false_positives: CaseResult[];
+}
+
+export interface ScenarioResult {
+  id: string;
+  title: string;
+  agent: string;
+  message: string;
+  passed: boolean;
+  failures: string[];
+  blocked: boolean;
+  tools: string[];
+  duration_ms: number;
+}
+
+export interface AgentReport {
+  scenarios: number;
+  passed: number;
+  pass_rate: number;
+  results: ScenarioResult[];
+}
+
+export interface RedTeamRun {
+  id: string;
+  status: "running" | "completed" | "failed";
+  suites: Suite[];
+  started_by: string;
+  started_at: string;
+  finished_at: string | null;
+  progress_done: number;
+  progress_total: number;
+  firewall: FirewallReport | null;
+  agents: AgentReport | null;
+  error: string | null;
+}
+
+export interface RunSummary {
+  id: string;
+  status: RedTeamRun["status"];
+  suites: Suite[];
+  started_by: string;
+  started_at: string;
+  finished_at: string | null;
+  recall: number | null;
+  precision: number | null;
+  false_positive_rate: number | null;
+  scenarios_passed: number | null;
+  scenarios_total: number | null;
+}
+
+export interface SuiteInfo {
+  firewall: { cases: number; malicious: number; categories: Record<string, number> };
+  agents: { scenarios: number; items: { id: string; title: string; agent: string }[] };
+}
+
+// ------------------------------------------------------------ threat coverage
+export type CoverageStatus = "mitigated" | "partial" | "gap";
+
+export interface Control {
+  id: string;
+  name: string;
+  description: string;
+  page: string | null;
+  code: string[];
+}
+
+export interface Evidence {
+  kind: "category" | "scenario" | "test";
+  ref: string;
+  label: string;
+  status: "pass" | "weak" | "fail" | "not_run" | "static";
+  detail: string | null;
+}
+
+export interface ThreatCoverage {
+  id: string;
+  name: string;
+  description: string;
+  status: CoverageStatus;
+  controls: string[];
+  evidence: Evidence[];
+  residual: string;
+  verified: boolean | null;
+}
+
+export interface Framework {
+  id: string;
+  name: string;
+  version: string;
+  url: string;
+  items: ThreatCoverage[];
+  summary: Partial<Record<CoverageStatus, number>>;
+}
+
+export interface CoverageReport {
+  generated_at: string;
+  frameworks: Framework[];
+  controls: Control[];
+  evidence_run: RunSummary | null;
 }

@@ -40,6 +40,10 @@ export function actionTone(action: string): Tone {
     case "FLAG":
     case "flagged":
     case "redacted":
+    case "PENDING":
+    case "pending":
+    case "partial":
+    case "weak":
       return "warning";
     case "FAILED":
     case "failed":
@@ -50,6 +54,7 @@ export function actionTone(action: string): Tone {
     case "denied":
     case "CANCELLED":
       return "critical";
+    case "APPROVED":
     case "PARSING":
     case "SCREENING":
     case "EMBEDDING":
