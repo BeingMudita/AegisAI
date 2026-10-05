@@ -4,6 +4,7 @@ import {
   Database,
   Gauge,
   LayoutDashboard,
+  GitBranch,
   LogOut,
   Menu,
   Monitor,
@@ -30,6 +31,7 @@ const Overview = lazy(() => import("./pages/Overview"));
 const Policies = lazy(() => import("./pages/Policies"));
 const Trust = lazy(() => import("./pages/Trust"));
 const Architecture = lazy(() => import("./pages/Architecture"));
+const Sessions = lazy(() => import("./pages/Sessions"));
 
 interface Route {
   id: string;
@@ -58,6 +60,14 @@ const ROUTES: Route[] = [
     render: () => <Events />,
   },
   { id: "trust", label: "Trust", group: "Monitor", icon: Gauge, staffOnly: true, render: () => <Trust /> },
+  {
+    id: "sessions",
+    label: "Attack reconstruction",
+    group: "Monitor",
+    icon: GitBranch,
+    staffOnly: false,
+    render: () => <Sessions />,
+  },
   {
     id: "knowledge",
     label: "Knowledge base",
