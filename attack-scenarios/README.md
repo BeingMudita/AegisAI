@@ -2,8 +2,8 @@
 
 Red-team test cases used to validate AegisAI's defenses. Both files are plain
 YAML so new cases can be added without touching code; the evaluation harness
-(`evaluation/run_eval.py`) and the CI test `backend/tests/test_evaluation.py`
-pick them up automatically.
+(`evaluation/run_eval.py`), the CI test `backend/tests/test_evaluation.py` and the
+dashboard's **Red-team lab** pick them up automatically.
 
 ## `firewall_cases.yaml` — 73 labelled inputs
 
@@ -34,7 +34,12 @@ the outcome: whether the turn was blocked, which tools executed or were denied
 (or must never) appear in the answer. Scenarios cover benign use, direct and
 obfuscated injection, exfiltration by email and upload, cross-agent privilege
 use, off-list domains, indirect injection via a poisoned web page and a
-poisoned knowledge-base document, and trust degradation / suspension.
+poisoned knowledge-base document, trust degradation / suspension, and
+high-impact actions held for human approval (`pending`).
+
+A scenario may set `setup: {trust: 0.65}` to start the agent at a given trust
+score. Expectation keys: `blocked`, `executed`, `denied` (tool → checkpoint),
+`pending`, `withheld`, `answer_includes`, `answer_excludes`.
 
 ## Adding a case
 

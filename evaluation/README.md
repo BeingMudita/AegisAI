@@ -9,6 +9,11 @@ backend/.venv/Scripts/python evaluation/run_eval.py   # Windows
 backend/.venv/bin/python evaluation/run_eval.py       # macOS / Linux
 ```
 
+The same runner powers the dashboard's **Red-team lab** (`POST /api/redteam/runs`),
+which adds charts, a confusion matrix, a case explorer and run history, and feeds
+the evidence column of **Threat coverage**. Runs use an isolated audit log and fresh
+trust registries, so they never touch live state.
+
 Writes `results/report.md` (human-readable) and `results/results.json`
 (machine-readable), and exits non-zero if any agent scenario fails. The same
 suites run in CI through `backend/tests/test_evaluation.py`, which fails if
@@ -63,7 +68,10 @@ lists every miss and false positive.
 **Agent scenarios** — each scenario runs a full guarded turn with the
 deterministic rule-based brain in a fresh runtime (own trust registry,
 knowledge base and gateway) and checks blocked / executed / denied-at-
-checkpoint / withheld / answer-leak expectations.
+checkpoint / pending-approval / withheld / answer-leak expectations.
+AG-06 checks that an internal email is held for approval rather than sent;
+AG-21 starts the agent below the 0.70 trust bar for email and expects a
+denial at the trust check.
 
 ## Current results
 

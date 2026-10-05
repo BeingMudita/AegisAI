@@ -14,6 +14,11 @@ is untrusted data (indirect injection) — and passed through DLP when the
 agent's policy marks the tool's data category as sensitive.
 
 Every outcome is audited and feeds the agent's trust score.
+
+Tools marked ``requires_approval`` stop after the checkpoints pass: the request
+is queued for a human. On approval every checkpoint is re-run (the agent's trust,
+its policy or the domain list may have changed meanwhile) before the tool runs;
+claiming a request is atomic, so it can never execute twice.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import json
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -47,6 +52,14 @@ from app.trust.engine import TrustEngine, get_trust_engine
 from app.trust.scoring import TrustSignal
 
 _WITHHELD = "[Tool output withheld: the firewall detected an injection attempt in it.]"
+
+
+class ApprovalError(Exception):
+    """The request can't be approved or rejected (unknown, or already decided)."""
+
+    def __init__(self, message: str, *, not_found: bool = False) -> None:
+        super().__init__(message)
+        self.not_found = not_found
 
 
 class _Denied(Exception):
@@ -91,6 +104,7 @@ class ToolGateway:
         self.implementations = implementations
         self._calls: dict[tuple[str, str], deque[float]] = {}
         self._log: deque[ToolCallResult] = deque(maxlen=1000)
+        self._by_id: dict[str, ToolCallResult] = {}
         self._lock = threading.Lock()
 
     # -------------------------------------------------------------- catalog
@@ -109,6 +123,7 @@ class ToolGateway:
                     data_category=tp.data_category,
                     parameters=impl.parameters,
                     domain_checked_argument=impl.domain_arg,
+                    requires_approval=tp.requires_approval,
                 )
             )
         return out
@@ -131,6 +146,7 @@ class ToolGateway:
         with self._lock:
             self._calls.clear()
             self._log.clear()
+            self._by_id.clear()
 
     # ------------------------------------------------------------ execution
     def execute(
@@ -151,6 +167,18 @@ class ToolGateway:
             self._deny(result, denied)
             return self._finish(result)
 
+        if tool_policy.requires_approval:
+            return self._queue_for_approval(result, tool_policy)
+        return self._run(result, impl, tool_policy, policy_engine)
+
+    def _run(
+        self,
+        result: ToolCallResult,
+        impl: ToolImpl,
+        tool_policy: ToolPolicy,
+        policy_engine: PolicyEngine,
+    ) -> ToolCallResult:
+        agent, session_id = result.agent, result.session_id
         try:
             raw_output = impl.run(result.arguments, ToolContext(agent=agent, session_id=session_id))
         except Exception as exc:  # noqa: BLE001 — any tool failure is reported, not raised
@@ -163,19 +191,124 @@ class ToolGateway:
 
         result.output = self._screen_output(result, impl, tool_policy, policy_engine, raw_output)
         result.status = ToolRequestStatus.EXECUTED
-        result.decision_reason = (
-            "Executed, but the output was withheld: the firewall found an injection in it."
-            if result.output_action == FirewallAction.BLOCK
-            else "All checkpoints passed."
-        )
+        if result.output_action == FirewallAction.BLOCK:
+            result.decision_reason = (
+                "Executed, but the output was withheld: the firewall found an injection in it."
+            )
+        elif result.reviewed_by:
+            result.decision_reason = (
+                f"Approved by {result.reviewed_by}; every checkpoint re-verified and passed."
+            )
+        else:
+            result.decision_reason = "All checkpoints passed."
         self.trust.observe(
             SubjectType.AGENT,
             agent,
             TrustSignal.CLEAN_ACTION,
-            rationale=f"Used {tool} within policy",
+            rationale=f"Used {result.tool} within policy",
             session_id=session_id,
         )
         return self._finish(result)
+
+    # ------------------------------------------------------- human approval
+    def _queue_for_approval(
+        self, result: ToolCallResult, tool_policy: ToolPolicy
+    ) -> ToolCallResult:
+        ttl = get_settings().approval_ttl_minutes
+        result.status = ToolRequestStatus.PENDING
+        result.expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl)
+        result.decision_reason = (
+            f"Waiting for human approval: '{result.tool}' is a "
+            f"{tool_policy.risk_level.value.lower()}-risk action."
+        )
+        result.checks.append(
+            CheckResult(
+                checkpoint="approval",
+                passed=False,
+                detail=f"Queued for an administrator's decision (expires in {ttl} min).",
+            )
+        )
+        self._save_request(result)
+        return result
+
+    def approval_queue(
+        self, *, limit: int = 50
+    ) -> tuple[list[ToolCallResult], list[ToolCallResult]]:
+        """(pending, recently decided) — expired requests are closed first."""
+        self._expire_pending()
+        pending = self._pending_requests()
+        recent = [
+            r
+            for r in self.requests(limit=500)
+            if r.reviewed_by or r.decision_reason.startswith("No decision")
+        ][:limit]
+        return pending, recent
+
+    def approve(self, request_id: str, reviewer: str, note: str = "") -> ToolCallResult:
+        """Approve a queued request: re-verify every checkpoint, then run the tool."""
+        self._expire_pending()
+        result = self._claim(request_id, reviewer, note)
+        result.checks = [c for c in result.checks if c.checkpoint != "approval"]
+        result.checks.append(
+            CheckResult(
+                checkpoint="approval",
+                passed=True,
+                detail=f"Approved by {reviewer}" + (f": {note}" if note else "."),
+            )
+        )
+        recheck = result.model_copy(update={"checks": []})
+        try:
+            impl, tool_policy, policy_engine = self._authorize(recheck)
+        except _Denied as denied:
+            result.checks.extend(recheck.checks)
+            denied.reason = f"Approved, but the re-check at approval time failed: {denied.reason}"
+            self._deny(result, denied)
+            return self._finish(result)
+        result.checks.append(
+            CheckResult(
+                checkpoint="recheck",
+                passed=True,
+                detail="Policy, domain, firewall, trust and rate limit re-verified at approval.",
+            )
+        )
+        return self._run(result, impl, tool_policy, policy_engine)
+
+    def reject(self, request_id: str, reviewer: str, note: str = "") -> ToolCallResult:
+        """Reject a queued request; the agent takes a small trust penalty."""
+        self._expire_pending()
+        result = self._claim(request_id, reviewer, note)
+        reason = f"Rejected by {reviewer}" + (f": {note}" if note else ".")
+        result.checks = [c for c in result.checks if c.checkpoint != "approval"]
+        self._deny(
+            result,
+            _Denied(
+                "approval",
+                reason,
+                event=SecurityEventType.TOOL_DENIED,
+                severity=SecuritySeverity.MEDIUM,
+                signal=TrustSignal.TOOL_DENIED,
+            ),
+        )
+        return self._finish(result)
+
+    def _expire_pending(self) -> None:
+        now = datetime.now(timezone.utc)
+        for pending in self._pending_requests():
+            if not pending.expires_at or pending.expires_at > now:
+                continue
+            try:
+                result = self._claim(pending.id, "system", "expired")
+            except ApprovalError:
+                continue  # decided concurrently
+            result.reviewed_by = None
+            result.review_note = None
+            result.checks = [c for c in result.checks if c.checkpoint != "approval"]
+            result.checks.append(
+                CheckResult(checkpoint="approval", passed=False, detail="Expired.")
+            )
+            result.status = ToolRequestStatus.DENIED
+            result.decision_reason = "No decision before the approval request expired."
+            self._finish(result)
 
     def _authorize(self, result: ToolCallResult) -> tuple[ToolImpl, ToolPolicy, PolicyEngine]:
         agent, tool, args = result.agent, result.tool, result.arguments
@@ -391,12 +524,41 @@ class ToolGateway:
             agent=result.agent,
             reason=result.decision_reason,
         )
-        self._store_request(result)
+        self._save_request(result)
         return result
 
-    def _store_request(self, result: ToolCallResult) -> None:
+    # ------------------------------------------------ storage (memory)
+    def _save_request(self, result: ToolCallResult) -> None:
+        """Insert or update a request record."""
         with self._lock:
-            self._log.append(result)
+            if result.id in self._by_id:
+                for i, existing in enumerate(self._log):
+                    if existing.id == result.id:
+                        self._log[i] = result
+                        break
+            else:
+                if len(self._log) == self._log.maxlen:
+                    self._by_id.pop(self._log[0].id, None)
+                self._log.append(result)
+            self._by_id[result.id] = result
+
+    def _pending_requests(self) -> list[ToolCallResult]:
+        with self._lock:
+            return [r.model_copy(deep=True) for r in reversed(self._log) if r.pending]
+
+    def _claim(self, request_id: str, reviewer: str, note: str) -> ToolCallResult:
+        """Atomically move a PENDING request to APPROVED (under review) and return it."""
+        with self._lock:
+            result = self._by_id.get(request_id)
+            if result is None:
+                raise ApprovalError("Approval request not found.", not_found=True)
+            if not result.pending:
+                raise ApprovalError(f"Request is already {result.status.value.lower()}.")
+            result.status = ToolRequestStatus.APPROVED
+            result.reviewed_by = reviewer
+            result.review_note = note or None
+            result.reviewed_at = datetime.now(timezone.utc)
+            return result.model_copy(deep=True)
 
 
 def _risk_severity(risk: ToolRiskLevel) -> SecuritySeverity:

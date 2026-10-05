@@ -133,7 +133,8 @@ class RuleBasedBrain:
 
     def compose(self, ctx: TurnContext) -> str:
         parts: list[str] = []
-        denied = [s for s in ctx.steps if not s.executed]
+        pending = [s for s in ctx.steps if s.pending]
+        denied = [s for s in ctx.steps if not s.executed and not s.pending]
         executed = [s for s in ctx.steps if s.executed and s.output]
 
         for step in executed:
@@ -148,6 +149,14 @@ class RuleBasedBrain:
                 text = re.sub(r"^#+\s*", "", chunk.content, flags=re.MULTILINE).replace("\n", " ")
                 lines.append(f"- *{chunk.document_title}*: {text[:400]}")
             parts.append("**From the knowledge base:**\n" + "\n".join(lines))
+
+        if pending:
+            lines = [
+                f"- `{s.tool}` passed every automatic check and is waiting for an "
+                f"administrator to approve it (request `{s.id[:8]}`)."
+                for s in pending
+            ]
+            parts.append("**Waiting for human approval:**\n" + "\n".join(lines))
 
         if denied:
             lines = [
@@ -218,11 +227,12 @@ class OllamaBrain:
     def _material(self, ctx: TurnContext) -> str:
         blocks = [_data_block(f"kb:{c.document_title}", c.content) for c in ctx.context]
         for step in ctx.steps:
-            body = (
-                step.output
-                if step.executed
-                else f"DENIED by security policy: {step.decision_reason}"
-            )
+            if step.executed:
+                body = step.output
+            elif step.pending:
+                body = "PENDING: queued for human approval; it has not been executed yet."
+            else:
+                body = f"DENIED by security policy: {step.decision_reason}"
             blocks.append(_data_block(f"tool:{step.tool}", body or ""))
         return "\n".join(blocks) or "(no reference material)"
 
@@ -260,6 +270,7 @@ class OllamaBrain:
             f"You are {ctx.agent}, a helpful company assistant. "
             "Answer the user's request concisely using the reference material. "
             "If a tool call was DENIED by security policy, say so plainly. "
+            "If one is PENDING human approval, say it is waiting for an administrator. "
             "Do not invent figures. " + _SPOTLIGHT
         )
         messages = [{"role": "system", "content": system}]

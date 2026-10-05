@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Database,
+  FlaskConical,
   Gauge,
   LayoutDashboard,
   GitBranch,
@@ -12,7 +13,9 @@ import {
   Network,
   ScrollText,
   ShieldAlert,
+  ShieldCheck,
   Sun,
+  UserCheck,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
@@ -32,11 +35,14 @@ const Policies = lazy(() => import("./pages/Policies"));
 const Trust = lazy(() => import("./pages/Trust"));
 const Architecture = lazy(() => import("./pages/Architecture"));
 const Sessions = lazy(() => import("./pages/Sessions"));
+const Approvals = lazy(() => import("./pages/Approvals"));
+const RedTeam = lazy(() => import("./pages/RedTeam"));
+const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
 
 interface Route {
   id: string;
   label: string;
-  group: "Monitor" | "Operate" | "Govern";
+  group: "Monitor" | "Operate" | "Assure" | "Govern";
   icon: ComponentType<{ className?: string }>;
   staffOnly: boolean;
   render: () => ReactNode;
@@ -83,6 +89,30 @@ const ROUTES: Route[] = [
     icon: Bot,
     staffOnly: false,
     render: () => <AgentConsole />,
+  },
+  {
+    id: "approvals",
+    label: "Approvals",
+    group: "Operate",
+    icon: UserCheck,
+    staffOnly: true,
+    render: () => <Approvals />,
+  },
+  {
+    id: "redteam",
+    label: "Red-team lab",
+    group: "Assure",
+    icon: FlaskConical,
+    staffOnly: true,
+    render: () => <RedTeam />,
+  },
+  {
+    id: "coverage",
+    label: "Threat coverage",
+    group: "Assure",
+    icon: ShieldCheck,
+    staffOnly: false,
+    render: () => <ThreatCoverage />,
   },
   {
     id: "architecture", label: "Architecture", group: "Govern", icon: Network,
@@ -157,6 +187,8 @@ export default function App() {
   const drawer = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const runtime = useApi<{ brain: string }>(user ? "/api/agents/runtime" : null);
+  const approvals = useApi<{ pending: unknown[] }>(isStaff(user) ? "/api/approvals" : null, 5000);
+  const pendingApprovals = approvals.data?.pending.length ?? 0;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -200,7 +232,7 @@ export default function App() {
         </div>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto px-3 py-2">
-        {(["Monitor", "Operate", "Govern"] as const).map((group) => {
+        {(["Monitor", "Operate", "Assure", "Govern"] as const).map((group) => {
           const items = routes.filter((r) => r.group === group);
           if (!items.length) return null;
           return (
@@ -229,6 +261,15 @@ export default function App() {
                       className={`h-[18px] w-[18px] ${active ? "text-accent" : "text-nav-ink-2 group-hover:text-nav-ink"}`}
                     />
                     {r.label}
+                    {r.id === "approvals" && pendingApprovals > 0 && (
+                      <span
+                        className="ml-auto rounded-full px-1.5 text-[11px] font-semibold text-white"
+                        style={{ background: "var(--warning)" }}
+                        aria-label={`${pendingApprovals} waiting`}
+                      >
+                        {pendingApprovals}
+                      </span>
+                    )}
                   </button>
                 );
               })}

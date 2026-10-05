@@ -112,19 +112,13 @@ def test_injection_in_arguments_blocked() -> None:
     assert _failed_at(result) == "firewall"
 
 
-def test_trust_gate_and_admin_elevation() -> None:
+def test_trust_gate_blocks_high_risk_tool() -> None:
     gw = _gateway()
+    gw.trust.override(SubjectType.AGENT, "FinanceAgent", 0.65, rationale="t", assessed_by="t")
     args = {"to": "cfo@company.com", "subject": "Q3", "body": "Report attached."}
     denied = gw.execute("FinanceAgent", "send_email", args)
-    assert _failed_at(denied) == "trust"  # 0.75 < 0.80
+    assert _failed_at(denied) == "trust"  # 0.65 < 0.70, never reaches the approval queue
     assert OUTBOX == []
-
-    gw.trust.override(
-        SubjectType.AGENT, "FinanceAgent", 0.9, rationale="reviewed", assessed_by="admin"
-    )
-    sent = gw.execute("FinanceAgent", "send_email", args)
-    assert sent.status == ToolRequestStatus.EXECUTED
-    assert OUTBOX[-1]["to"] == "cfo@company.com"
 
 
 def test_rate_limit() -> None:

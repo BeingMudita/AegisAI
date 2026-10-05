@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import threading
 from collections import Counter, deque
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
 
@@ -149,11 +152,32 @@ class AuditLog:
 
 
 @lru_cache
-def get_audit_log() -> AuditLog:
-    """Return the process-wide audit log (durable in Postgres mode)."""
+def _process_audit_log() -> AuditLog:
     settings = get_settings()
     if settings.use_postgres:
         from app.persistence.audit import PostgresAuditLog
 
         return PostgresAuditLog()
     return AuditLog(max_events=settings.audit_buffer_size)
+
+
+# Lets a sandboxed workload (a red-team run) send its events to its own log, so
+# simulated attacks never appear in the real audit trail. Context variables are
+# per thread / task, so concurrent requests are unaffected.
+_audit_override: ContextVar[AuditLog | None] = ContextVar("aegis_audit_override", default=None)
+
+
+def get_audit_log() -> AuditLog:
+    """Return the audit log for the current context (durable in Postgres mode)."""
+    return _audit_override.get() or _process_audit_log()
+
+
+@contextmanager
+def isolated_audit_log(log: AuditLog | None = None) -> Iterator[AuditLog]:
+    """Route this context's events to a private in-memory log for the duration."""
+    log = log or AuditLog()
+    token = _audit_override.set(log)
+    try:
+        yield log
+    finally:
+        _audit_override.reset(token)

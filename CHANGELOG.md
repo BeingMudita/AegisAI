@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-10-03 — Assurance: human approval, red-team lab, threat coverage
+
+### What changed
+
+- **Human approval workflow.** Tools can be marked `requires_approval` in
+  `default_policies.yaml`; `send_email` now is (and its trust bar moved from 0.80
+  to 0.70, since a human now reviews every email). Such a call passes all six
+  automatic checks, then waits as `PENDING` with an expiry (`APPROVAL_TTL_MINUTES`,
+  default 60).
+  - Admins approve or reject it with an optional note.
+  - Approval claims the request atomically, so it never runs twice, even across
+    workers.
+  - Approval re-runs every check before executing.
+  - Rejection costs the agent trust.
+  - New API: `GET /api/approvals`, `POST /api/approvals/{id}/approve|reject`.
+  - New dashboard page **Approvals**, with a live sidebar badge.
+  - The agent's answer says what is waiting for approval.
+- **Red-team lab.** Staff can launch the attack suites from the dashboard
+  (`/api/redteam/runs`).
+  - Runs execute in the background against an isolated audit log and fresh trust
+    registries, so live state is untouched.
+  - The page shows: detection KPIs, detection by attack family, a confusion
+    matrix, a filterable case explorer (misses and false alarms), agent scenario
+    outcomes, run history and JSON export.
+  - `evaluation/run_eval.py` is now a thin CLI over the same runner (`app/redteam/`).
+- **Threat coverage.** `app/compliance/catalog.py` maps 16 controls to the OWASP
+  Top 10 for LLM Applications 2025 and nine MITRE ATLAS techniques.
+  - Each threat has a status, controls, evidence and residual risk.
+  - `GET /api/compliance` checks the evidence live against the latest red-team run.
+  - New dashboard page **Threat coverage**: coverage matrix, threat detail, and
+    code paths per control.
+  - Current OWASP standing: 5 mitigated, 4 partial, 1 gap (LLM03 Supply Chain).
+- **Documentation.**
+  - Rewritten README.
+  - New `docs/threat-model.md` and `SECURITY.md`.
+  - New screenshots.
+  - Updated architecture, operator, evaluation and manual-test guides.
+- Navigation is grouped as Monitor / Operate / Assure / Govern. Policies & tools
+  shows which tools need human approval.
+- Migration `0003`: review columns on `tool_requests` (`expires_at`, `reviewed_by`,
+  `review_note`, `reviewed_at`) and a `redteam_runs` table.
+- The backend image now contains `attack-scenarios/`, so the Red-team lab works in
+  Docker. New setting `REDTEAM_SUITES_DIR` overrides the location.
+
+### Scenario changes
+
+- AG-06 now expects the internal email to be **pending** approval, not sent.
+- AG-21 starts FinanceAgent at trust 0.65 and expects `send_email` to be denied
+  at the trust check.
+- `test_trust_gate_and_admin_elevation` became `test_trust_gate_blocks_high_risk_tool`;
+  approval itself is covered by `tests/test_approvals.py`.
+
+### Validation
+
+- Memory mode: 161 passed (11 Postgres-only tests skipped).
+- Postgres mode (`AEGIS_TEST_POSTGRES=1`): 172 passed.
+- New tests:
+  - `test_approvals.py`: queueing, approve, reject, re-check failure, expiry,
+    double-approval, role checks, API.
+  - `test_redteam.py`: isolation from live state, report contents, API lifecycle,
+    conflict handling.
+  - `test_compliance.py`: catalog integrity and live evidence.
+- Evaluation: precision 97.6%, recall 95.3%, false-positive rate 3.3%, agent
+  scenarios 21 / 21.
+- Ruff and the TypeScript build pass. The three new pages were exercised in a
+  headless browser with no console errors: an email was queued, approved and
+  executed, a red-team run completed, and coverage updated.
+
 ## 2026-10-03 — Phase 9: durable PostgreSQL + pgvector storage
 
 ### What changed

@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_ML" = "true" ]; then pip install --no-cache-dir -r requirements-ml.txt; fi
 
 COPY backend/ ./
+# Red-team suites for the dashboard's Red-team lab (found at /app/attack-scenarios).
+COPY attack-scenarios/ ./attack-scenarios/
 
 # Run as an unprivileged user.
 RUN useradd --create-home --uid 10001 aegis && chown -R aegis /app
