@@ -74,15 +74,23 @@ class PromptFirewall:
                 )
 
         # 2. Alternate readings (de-leeted, de-spaced). A rule that only fires
-        #    here means the author obfuscated it on purpose.
-        evaded = False
-        for variant in norm.variants:
+        #    here means the author obfuscated it on purpose — tracked per kind
+        #    so the right obfuscation signal is scored below.
+        evaded_leet = False
+        evaded_spacing = False
+        labelled = [("leet", v) for v in norm.leet_variants]
+        if norm.spaced_variant is not None:
+            labelled.append(("spaced", norm.spaced_variant))
+        for kind, variant in labelled:
             for rule in self.rules:
                 if rule.rule_id in matches:
                     continue
                 m = rule.pattern.search(variant)
                 if m:
-                    evaded = True
+                    if kind == "leet":
+                        evaded_leet = True
+                    else:
+                        evaded_spacing = True
                     matches[rule.rule_id] = RuleMatch(
                         rule_id=rule.rule_id,
                         category=rule.category,
@@ -113,10 +121,14 @@ class PromptFirewall:
             self._add_signal(
                 matches, "OB-002", f"{norm.homoglyph_count} mixed-script word(s)", indirect
             )
-        if evaded and norm.spaced_letter_runs:
+        if evaded_spacing and norm.spaced_letter_runs:
             self._add_signal(matches, "OB-003", "spaced-out letters", indirect)
         if hidden_payload:
             self._add_signal(matches, "OB-004", "base64-encoded instructions", indirect)
+        if evaded_leet:
+            self._add_signal(
+                matches, "OB-005", "leetspeak / symbol-substituted instruction", indirect
+            )
 
         return self._verdict(list(matches.values()), channel)
 
