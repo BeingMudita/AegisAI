@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   Network,
+  Radar,
   ScrollText,
   ShieldAlert,
   ShieldCheck,
@@ -38,6 +39,7 @@ const Sessions = lazy(() => import("./pages/Sessions"));
 const Approvals = lazy(() => import("./pages/Approvals"));
 const RedTeam = lazy(() => import("./pages/RedTeam"));
 const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
+const AttackReplay = lazy(() => import("./pages/AttackReplay"));
 
 interface Route {
   id: string;
@@ -73,6 +75,14 @@ const ROUTES: Route[] = [
     icon: GitBranch,
     staffOnly: false,
     render: () => <Sessions />,
+  },
+  {
+    id: "replay",
+    label: "Attack replay",
+    group: "Monitor",
+    icon: Radar,
+    staffOnly: false,
+    render: () => <AttackReplay />,
   },
   {
     id: "knowledge",

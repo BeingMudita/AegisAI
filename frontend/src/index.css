@@ -148,6 +148,28 @@ body {
   }
 }
 
+/* --- Attack replay (digital twin) timeline --------------------------------- */
+@keyframes flow-down {
+  from { background-position: 0 0; }
+  to { background-position: 0 16px; }
+}
+/* animated vertical connector between revealed replay steps */
+.flow-active-v {
+  background-image: linear-gradient(180deg, var(--flow, var(--series-1)) 50%, transparent 50%);
+  background-size: 2px 12px;
+  animation: flow-down 0.8s linear infinite;
+}
+@keyframes replay-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.replay-step-enter { animation: replay-rise 0.45s ease both; }
+@keyframes replay-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--pulse); }
+  50% { box-shadow: 0 0 0 8px transparent; }
+}
+.replay-active { animation: replay-pulse 1.6s ease-in-out infinite; }
+
 /* Workspace design: quiet surfaces, clear hierarchy, and one restrained accent. */
 :root { font-synthesis: none; }
 body { margin: 0; }
