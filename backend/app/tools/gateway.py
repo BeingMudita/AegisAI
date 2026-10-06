@@ -171,6 +171,54 @@ class ToolGateway:
             return self._queue_for_approval(result, tool_policy)
         return self._run(result, impl, tool_policy, policy_engine)
 
+    def authorize(
+        self,
+        agent: str,
+        tool: str,
+        arguments: dict | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> ToolCallResult:
+        """Run the checkpoint ladder for a tool call and report the decision
+        **without executing the tool** — a pre-flight / dry run.
+
+        It is the same authorization the real gateway performs (registry → policy →
+        domain → firewall → trust → rate limit), so denials are recorded and audited
+        exactly as :meth:`execute` would. The only difference is that the tool
+        implementation never runs: an allowed call reports ``APPROVED`` (authorized,
+        would run), a high-impact call reports ``PENDING`` (would be queued for a
+        human), and a refused call reports ``DENIED`` with the failing checkpoint.
+
+        Powers ``POST /v1/secure/tool`` and the (future) MCP security proxy.
+        """
+        result = ToolCallResult(
+            agent=agent, session_id=session_id, tool=tool, arguments=dict(arguments or {})
+        )
+        try:
+            _impl, tool_policy, _engine = self._authorize(result)
+        except _Denied as denied:
+            self._deny(result, denied)
+            result.decided_at = datetime.now(timezone.utc)
+            return result
+        if tool_policy.requires_approval:
+            result.status = ToolRequestStatus.PENDING
+            result.decision_reason = (
+                f"Authorized, but '{tool}' is a {tool_policy.risk_level.value.lower()}-risk "
+                "action that would be queued for human approval before running."
+            )
+            result.checks.append(
+                CheckResult(
+                    checkpoint="approval",
+                    passed=False,
+                    detail="Requires a human decision before it can run.",
+                )
+            )
+        else:
+            result.status = ToolRequestStatus.APPROVED
+            result.decision_reason = "All checkpoints passed (dry run — the tool was not executed)."
+        result.decided_at = datetime.now(timezone.utc)
+        return result
+
     def _run(
         self,
         result: ToolCallResult,

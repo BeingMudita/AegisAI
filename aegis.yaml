@@ -1,0 +1,38 @@
+# aegis.yaml — AegisAI policy-as-code.
+# Describe what ONE agent may do; AegisAI enforces it (deny by default).
+# Apply it with the SDK:  SecureAgent("FinanceAgent", policy="aegis.yaml")
+# or validate it with:    aegis scan aegis.yaml
+agent:
+  name: FinanceAgent
+
+permissions:
+  # Tools this agent may call. Anything not listed is denied.
+  tools:
+    - search_documents
+    - read_database
+    - generate_report
+    - send_email
+
+domains:
+  # Allow-listed destinations for URL/email tool arguments.
+  allowed:
+    - company.com
+
+data:
+  # Informational: the data this agent legitimately handles.
+  allow:
+    - invoice
+    - transaction
+  # Treated as sensitive — redacted from outputs by DLP.
+  deny:
+    - customer_records
+    - credentials
+
+trust:
+  # Minimum trust the agent must hold to use its tools (0–1).
+  minimum: 0.70
+
+approval:
+  # High-impact tools that wait for a human, even after every check passes.
+  required_for:
+    - send_email

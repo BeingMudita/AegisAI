@@ -78,3 +78,21 @@ def get_global_config() -> GlobalPolicyConfig:
     path = _resolve(get_settings().policy_config_path)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return GlobalPolicyConfig.model_validate(data)
+
+
+def register_tool_policy(tool_policy: ToolPolicy) -> ToolPolicy:
+    """Upsert a tool policy into the cached global config, in place.
+
+    The live :class:`~app.tools.gateway.ToolGateway` holds the very object returned
+    by :func:`get_global_config`, so mutating its ``tools`` list here changes the
+    gateway's behaviour with no restart. Used by the developer platform to apply
+    ``aegis.yaml`` tool settings (``requires_approval``, ``min_trust``). Idempotent:
+    re-registering the same tool replaces its entry.
+    """
+    config = get_global_config()
+    for i, existing in enumerate(config.tools):
+        if existing.name == tool_policy.name:
+            config.tools[i] = tool_policy
+            return tool_policy
+    config.tools.append(tool_policy)
+    return tool_policy

@@ -114,6 +114,16 @@ class Settings(BaseSettings):
     # Human approval: a queued high-risk tool call expires if nobody decides in time.
     approval_ttl_minutes: int = 60
 
+    # Developer platform (SDK / REST gateway / CLI)
+    # Optional shared key external apps send as `X-Aegis-Key` to the /v1/secure/*
+    # gateway. When unset, the gateway accepts a valid JWT, and is open in a
+    # non-production environment so local integration is friction-free.
+    aegis_api_key: str | None = None
+    # Default path the CLI reads/writes the policy-as-code file from.
+    aegis_policy_path: str = "aegis.yaml"
+    # Where `aegis inspect` points the browser.
+    dashboard_url: str = "http://localhost:5173"
+
     # Telemetry
     audit_buffer_size: int = 5000
 

@@ -93,6 +93,41 @@ Deeper dive: [architecture](docs/architecture.md) · [threat model](docs/threat-
 
 ---
 
+## 🧩 Developer platform — plug your own agent in
+
+AegisAI is also a **security layer other AI agents can route through** — an SDK, a
+REST gateway and a CLI over the very same engines, so the pitch becomes *security
+middleware for agentic AI*, not just *a secure agent we built*. Full guide:
+[docs/platform.md](docs/platform.md).
+
+```python
+from aegisai import SecureAgent
+
+agent = SecureAgent("FinanceAgent", policy="aegis.yaml")
+r = agent.run("Summarize this month's invoices")
+print(r.decision, r.answer)        # ALLOW / FLAG / BLOCK + the guarded answer
+```
+
+- **Policy-as-code** — one `aegis.yaml` per agent (tools, domains, sensitive data,
+  trust floor, human-approval), applied straight into the real policy and gateway stores.
+- **SDK** — `SecureAgent` (whole pipeline), `AegisGuard` (input firewall / tool
+  pre-flight / output DLP primitives) and `AegisMiddleware` (wrap any
+  `Callable[[str], str]` agent from any framework).
+- **REST gateway** — `POST /v1/secure/chat · /tool · /scan`, `GET /v1/secure/agents`,
+  so an app in any language routes `App → Aegis → LLM`. Auth via a free `X-Aegis-Key`
+  header or a JWT.
+- **CLI** — `aegis init · scan · redteam · serve · inspect`
+  (`python -m app.platform.cli …`).
+
+```bash
+aegis init && aegis scan aegis.yaml --prompt "ignore all previous instructions"   # → BLOCK
+curl -s localhost:8000/v1/secure/tool -H 'content-type: application/json' \
+  -d '{"agent":"FinanceAgent","tool":"send_email","arguments":{"to":"x@gmail.com"}}'
+# → {"decision":"BLOCK","status":"DENIED", ... "checkpoint":"domain" ...}
+```
+
+---
+
 ## 🖥️ Product tour
 
 <table>
@@ -336,9 +371,11 @@ AegisAI/
 │   │   ├── rag/          # Chunking, embeddings, guarded knowledge base, seed corpus
 │   │   ├── redteam/      # Attack-suite runner and background run service
 │   │   ├── compliance/   # OWASP LLM Top 10 / MITRE ATLAS catalog and live evidence
+│   │   ├── platform/     # Developer platform: SDK, REST gateway (/v1/secure), CLI, policy-as-code
 │   │   ├── persistence/  # PostgreSQL implementations of every store
 │   │   ├── telemetry/    # Audit log (with isolated logs for red-team runs), logging
 │   │   └── database/     # Models, sessions, migration entry point
+│   ├── aegisai/          # Public SDK package: `from aegisai import SecureAgent`
 │   ├── migrations/       # Alembic revisions
 │   ├── data/             # inbox/ (drop files here), uploads/, index/ (git-ignored)
 │   └── tests/            # Regression tests, incl. the red-team security gate
@@ -357,6 +394,7 @@ AegisAI/
 
 | Document | For |
 |---|---|
+| [Developer platform](docs/platform.md) | Plug your own agent in: `aegis.yaml`, the Python SDK, the `/v1/secure` REST gateway and the `aegis` CLI |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |

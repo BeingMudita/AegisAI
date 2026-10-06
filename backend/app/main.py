@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from app import __version__
 from app.api.router import api_router
 from app.config import get_settings
+from app.platform.gateway_api import router as gateway_router
 from app.telemetry.logging import configure_logging
 
 settings = get_settings()
@@ -54,6 +55,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(gateway_router)  # developer platform: /v1/secure/*
 
 
 @app.middleware("http")
@@ -62,7 +64,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
-    if request.url.path.startswith("/api/"):
+    if request.url.path.startswith(("/api/", "/v1/")):
         response.headers["Cache-Control"] = "no-store"
     return response
 

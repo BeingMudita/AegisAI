@@ -17,6 +17,22 @@ from app.policies.schemas import AgentPolicy
 
 _EXAMPLES_DIR = Path(__file__).parent / "examples"
 
+# Runtime overrides registered by the developer platform (policy-as-code / SDK).
+# They take precedence over the file- and DB-backed policies so an agent defined
+# in an ``aegis.yaml`` is visible everywhere ``get_policy`` is consulted (the
+# gateway, the runtime, the API) without touching the backing store.
+_overrides: dict[str, AgentPolicy] = {}
+
+
+def register_policy(policy: AgentPolicy) -> None:
+    """Register (or replace) an agent policy at runtime, keyed by agent name."""
+    _overrides[policy.agent.lower()] = policy
+
+
+def clear_overrides() -> None:
+    """Drop every runtime-registered policy (used by tests)."""
+    _overrides.clear()
+
 
 @lru_cache
 def _load_all() -> dict[str, AgentPolicy]:
@@ -35,16 +51,22 @@ def example_policies() -> list[AgentPolicy]:
 
 
 def list_policies() -> list[AgentPolicy]:
-    """Return all known policies."""
+    """Return all known policies (runtime overrides take precedence by name)."""
     if get_settings().use_postgres:
         from app.persistence.identity import list_db_policies
 
-        return list_db_policies()
-    return example_policies()
+        base = {p.agent.lower(): p for p in list_db_policies()}
+    else:
+        base = dict(_load_all())
+    base.update(_overrides)
+    return list(base.values())
 
 
 def get_policy(agent: str) -> AgentPolicy | None:
-    """Fetch a policy by agent name (case-insensitive)."""
+    """Fetch a policy by agent name (case-insensitive); overrides win."""
+    override = _overrides.get(agent.lower())
+    if override is not None:
+        return override
     if get_settings().use_postgres:
         from app.persistence.identity import get_db_policy
 
