@@ -5,6 +5,8 @@
     aegis policy test [path]    # TEST: run the red-team against a policy
     aegis policy validate [p]   #        validate an aegis.yaml
     aegis gate <target>        # GATE: audit + red-team + threshold → PASS/FAIL (CI)
+    aegis blast <target>       # attack paths + blast radius for an agent
+    aegis threats              # the shared cross-agent threat-intelligence feed
     aegis scan-agent <dir>     # alias: audit a source directory
     aegis init                 # write a starter aegis.yaml
     aegis scan [path]          # validate a policy file / screen a prompt
@@ -127,6 +129,9 @@ def _cmd_gate(args: argparse.Namespace) -> int:
             f"    Security score   {result.score}/100 ({result.grade})"
             f"   threshold {result.threshold}"
         )
+        print(f"    Blast radius     {result.blast_radius}/100")
+        if result.risk_focus:
+            print(f"    Risk focus       {' → '.join(result.risk_focus)}")
         for fam in result.redteam:
             print(f"    {fam.family:<24} {fam.passed}/{fam.total} {mark[fam.ok]}")
         print("    " + "-" * 44)
@@ -135,6 +140,69 @@ def _cmd_gate(args: argparse.Namespace) -> int:
         print()
         print(f"    {'✓ Deployment permitted' if result.passed else '✗ Deployment blocked'}")
     return 0 if result.passed else 2
+
+
+def _cmd_blast(args: argparse.Namespace) -> int:
+    from app.platform import attackgraph, scanner
+
+    try:
+        report = attackgraph.analyze(args.target)
+        comparison = attackgraph.compare_hardening(scanner.profile_target(args.target))
+    except scanner.ScannerError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+
+        payload = {**report.model_dump(), "hardening": comparison.model_dump()}
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+
+    br = report.blast_radius
+    dot = {"red": "🔴", "orange": "🟠", "green": "🟢"}[br.level]
+    print(f"ATTACK SURFACE — {report.agent}")
+    print("    " + "-" * 44)
+    print(f"    Blast radius     {dot} {br.score}/100")
+    print("    Accessible data  " + (", ".join(br.accessible_data) or "(none)"))
+    print("    Destinations     " + (", ".join(br.destinations) or "(none)"))
+    print("    Dangerous acts   " + (", ".join(br.dangerous_actions) or "(none)"))
+    if report.paths:
+        print("\n    Attack paths")
+        for p in report.paths:
+            mark = {"HIGH": "🔴", "MEDIUM": "🟠", "LOW": "🟡"}.get(p.risk, "·")
+            print(f"      {mark} [{p.risk}] {' → '.join(p.steps)}")
+            print(f"           {p.detail}")
+    if report.risk_guided:
+        print("\n    Risk-guided red-team focus")
+        for f in sorted(report.risk_guided, key=lambda x: x.priority):
+            print(f"      {f.priority}. {f.family} — {f.rationale}")
+    print("\n    Hardening (least privilege)")
+    print(
+        f"      Before {comparison.before.score}  →  After {comparison.after.score}"
+        f"   (−{comparison.reduction})"
+    )
+    return 0
+
+
+def _cmd_threats(args: argparse.Namespace) -> int:
+    from app.platform.threatintel import get_threat_intel
+
+    feed = get_threat_intel().feed(limit=args.limit)
+    if args.json:
+        import json
+
+        print(json.dumps([s.model_dump() for s in feed], indent=2, default=str))
+        return 0
+    if not feed:
+        print("No threat signatures learned yet.")
+        return 0
+    print("AEGIS THREAT INTELLIGENCE FEED")
+    print("    " + "-" * 44)
+    for s in feed:
+        agents = ", ".join(s.agents) or "—"
+        print(f"    [{s.severity}] {s.type}  ×{s.hits}  (agents: {agents})")
+        print(f"        {s.excerpt}")
+    return 0
 
 
 def _cmd_proxy(args: argparse.Namespace) -> int:
@@ -420,6 +488,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_gate.add_argument("--json", action="store_true", help="emit the result as JSON")
     p_gate.add_argument("--markdown", action="store_true", help="emit a Markdown report")
     p_gate.set_defaults(func=_cmd_gate)
+
+    p_blast = sub.add_parser(
+        "blast", help="attack-surface graph, attack paths and blast radius for an agent"
+    )
+    p_blast.add_argument("target", help="agent name | aegis.yaml | source directory")
+    p_blast.add_argument("--json", action="store_true", help="emit the full analysis as JSON")
+    p_blast.set_defaults(func=_cmd_blast)
+
+    p_threats = sub.add_parser("threats", help="show the shared threat-intelligence feed")
+    p_threats.add_argument("--limit", type=int, default=50)
+    p_threats.add_argument("--json", action="store_true")
+    p_threats.set_defaults(func=_cmd_threats)
 
     p_proxy = sub.add_parser(
         "proxy", help="route an existing agent through AegisAI (the integration layer)"

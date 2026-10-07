@@ -51,6 +51,12 @@ class SecurityEngine:
         self.gateway = gateway or get_tool_gateway()
         self.trust = trust or get_trust_engine()
 
+    @property
+    def intel(self):
+        from app.platform.threatintel import get_threat_intel
+
+        return get_threat_intel()
+
     # ------------------------------------------------------------- dispatch
     def evaluate(self, event: AegisEvent) -> AegisDecision:
         """Judge one event and return a single decision."""
@@ -79,6 +85,7 @@ class SecurityEngine:
     # --------------------------------------------------------------- INPUT
     def _input(self, event: AegisEvent) -> AegisDecision:
         text = event.text or ""
+        match = self.intel.match(text)  # before recording, so it can't match itself
         verdict = self.firewall.inspect(
             text,
             ContentChannel.USER_INPUT,
@@ -86,23 +93,31 @@ class SecurityEngine:
             session_id=event.session_id,
             context="proxy input",
         )
+        self.intel.record_verdict(verdict, text, agent=event.agent)
         if verdict.action == FirewallAction.BLOCK:
             return AegisDecision(
                 decision=Decision.BLOCK,
                 reason=verdict.reason,
                 reason_code="prompt_injection",
-                checks={"firewall": CheckOutcome.FAIL},
+                checks={"firewall": CheckOutcome.FAIL, "threat_intel": _intel_check(match)},
                 categories=verdict.categories,
                 **self._base(event),
             )
         sanitized = (
             self.firewall.sanitize(text, verdict) if verdict.action == FirewallAction.FLAG else text
         )
+        decision = Decision.FLAG if verdict.action == FirewallAction.FLAG else Decision.ALLOW
+        reason = verdict.reason
+        reason_code = "suspicious_input" if verdict.action == FirewallAction.FLAG else "ok"
+        # Preemptive detection: a known HIGH attack pattern escalates a clean verdict.
+        if match is not None and match.severity == "HIGH":
+            decision = Decision.BLOCK if decision == Decision.FLAG else Decision.FLAG
+            reason, reason_code = match.reason, "known_attack_pattern"
         return AegisDecision(
-            decision=Decision.FLAG if verdict.action == FirewallAction.FLAG else Decision.ALLOW,
-            reason=verdict.reason,
-            reason_code="suspicious_input" if verdict.action == FirewallAction.FLAG else "ok",
-            checks={"firewall": CheckOutcome.PASS},
+            decision=decision,
+            reason=reason,
+            reason_code=reason_code,
+            checks={"firewall": CheckOutcome.PASS, "threat_intel": _intel_check(match)},
             sanitized_text=sanitized,
             categories=verdict.categories,
             **self._base(event),
@@ -112,9 +127,11 @@ class SecurityEngine:
     def _retrieval(self, event: AegisEvent) -> AegisDecision:
         quarantined: list[int] = []
         flagged = False
+        preempted = False
         categories: set[str] = set()
         kept: list[str] = []
         for i, doc in enumerate(event.documents):
+            match = self.intel.match(doc.content)
             verdict = self.firewall.inspect(
                 doc.content,
                 ContentChannel.RETRIEVED,
@@ -122,9 +139,15 @@ class SecurityEngine:
                 session_id=event.session_id,
                 context=f"retrieved from {doc.source}",
             )
+            self.intel.record_verdict(verdict, doc.content, agent=event.agent)
             categories.update(verdict.categories)
+            known_attack = match is not None and match.severity == "HIGH"
             if verdict.action == FirewallAction.BLOCK:
                 quarantined.append(i)
+            elif known_attack:  # preemptive: quarantine a known attack the firewall let pass
+                quarantined.append(i)
+                preempted = True
+                categories.add("KNOWN_THREAT")
             elif verdict.action == FirewallAction.FLAG:
                 flagged = True
                 kept.append(self.firewall.sanitize(doc.content, verdict))
@@ -135,7 +158,7 @@ class SecurityEngine:
                 f"Quarantined {len(quarantined)} of {len(event.documents)} "
                 "document(s) with injected instructions."
             )
-            code = "untrusted_content_quarantined"
+            code = "known_attack_pattern" if preempted else "untrusted_content_quarantined"
             decision = Decision.FLAG
         elif flagged:
             reason = "Retrieved content was sanitized before use."
@@ -182,6 +205,16 @@ class SecurityEngine:
         else:
             decision = Decision.ALLOW
         code = _TOOL_REASON_CODE.get(failed or "", "ok") if decision != Decision.ALLOW else "ok"
+        # Learn an exfiltration signature when a sensitive external send is refused.
+        if decision == Decision.BLOCK and failed == "domain":
+            self.intel.record_text(
+                f"{tool.name} -> {tool.arguments}",
+                ["DATA_EXFILTRATION"],
+                severity="HIGH",
+                agent=event.agent,
+                tool=tool.name,
+                destination="external",
+            )
         return AegisDecision(
             decision=decision,
             reason=result.decision_reason,
@@ -205,9 +238,11 @@ class SecurityEngine:
     ) -> AegisDecision:
         """Shared path for TOOL_RESULT / OUTPUT: injection scan, then DLP."""
         text = event.text or ""
+        match = self.intel.match(text)
         verdict = self.firewall.inspect(
             text, channel, agent=event.agent, session_id=event.session_id, context=context
         )
+        self.intel.record_verdict(verdict, text, agent=event.agent)
         if verdict.action == FirewallAction.BLOCK:
             return AegisDecision(
                 decision=Decision.BLOCK,
@@ -215,6 +250,16 @@ class SecurityEngine:
                 reason_code="injection_in_data",
                 checks={"firewall": CheckOutcome.FAIL, "dlp": CheckOutcome.SKIP},
                 categories=verdict.categories,
+                **self._base(event),
+            )
+        known = match is not None and match.severity == "HIGH"
+        if known and verdict.action == FirewallAction.ALLOW:
+            return AegisDecision(
+                decision=Decision.BLOCK,
+                reason=match.reason,
+                reason_code="known_attack_pattern",
+                checks={"firewall": CheckOutcome.PASS, "threat_intel": CheckOutcome.FAIL},
+                categories=[*verdict.categories, "KNOWN_THREAT"],
                 **self._base(event),
             )
         cleaned = (
@@ -243,6 +288,11 @@ class SecurityEngine:
             categories=verdict.categories,
             **self._base(event),
         )
+
+
+def _intel_check(match) -> CheckOutcome:
+    """A threat-intel checkpoint: FAIL when a known attack pattern matched."""
+    return CheckOutcome.FAIL if match is not None else CheckOutcome.PASS
 
 
 @lru_cache

@@ -8,6 +8,7 @@ from app.api.routes import (
     adaptive,
     agents,
     approvals,
+    attack_surface,
     auth,
     autopilot,
     compliance,
@@ -20,6 +21,7 @@ from app.api.routes import (
     scanner,
     security_events,
     sessions,
+    threatintel,
     tools,
     trust,
 )
@@ -43,3 +45,5 @@ api_router.include_router(registry.router)
 api_router.include_router(gate.router)
 api_router.include_router(adaptive.router)
 api_router.include_router(autopilot.router)
+api_router.include_router(attack_surface.router)
+api_router.include_router(threatintel.router)

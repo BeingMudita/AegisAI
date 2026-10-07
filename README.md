@@ -202,6 +202,28 @@ aegis gate FinanceAgent --threshold 90   # ✓ Deployment permitted  (exit 0 / 2
 
 ---
 
+## 🧠 Collective & structural defence
+
+Two composition-level capabilities. Full guide:
+[docs/threat-intelligence.md](docs/threat-intelligence.md).
+
+- **Threat Intelligence Engine** — when one agent is attacked, AegisAI distils a normalized
+  threat signature and shares it, so another agent is warned about a *variant* of that attack
+  before experiencing it (preemptive detection, even below its own firewall threshold).
+  `aegis threats`, `/api/threat-intel/*`.
+- **Attack-surface analysis** — composes permissions into an attack-surface graph, enumerates
+  dangerous **paths** (`RAG → agent → read_database → send_email → external`), scores the agent's
+  **blast radius** if compromised (0–100), and uses the most dangerous path to **focus the red
+  team**. `aegis blast <agent>`, `/api/attack-surface/*`.
+
+```
+aegis blast weak-agent
+  Blast radius  🔴 71/100     Hardening (least privilege)  Before 71 → After 50 (−21)
+  🔴 [HIGH] external web pages → agent → read_database → send_email → ANY external host
+```
+
+---
+
 ## 🖥️ Product tour
 
 <table>
@@ -472,6 +494,7 @@ AegisAI/
 | [Security scanner](docs/scanner.md) | Scan an agent, score it /100, generate a least-privilege policy and red-team it (`aegis audit` / `generate-policy` / `policy test`) |
 | [Integration layer](docs/proxy.md) | Route an existing agent through AegisAI: the event protocol, adapters, the proxy, `aegis proxy` and `aegis-agent.yaml` |
 | [AI-DevSecOps](docs/devsecops.md) | Registry onboarding, the security gate, the GitHub Action, runtime adaptive security and Autopilot policy recommendations |
+| [Threat intelligence](docs/threat-intelligence.md) | Cross-agent threat signatures (preemptive detection), attack-surface graph, attack paths, blast radius and risk-guided red teaming |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |

@@ -58,6 +58,8 @@ class GateResult(BaseModel):
     redteam: list[RedTeamFamily] = Field(default_factory=list)
     redteam_passed: int = 0
     redteam_total: int = 0
+    blast_radius: int = 0
+    risk_focus: list[str] = Field(default_factory=list)
     summary: str = ""
 
 
@@ -111,6 +113,13 @@ def run_gate(
     report = scanner.score_report(profile)
     high = [f"{f.category}: {f.detail}" for f in report.findings if f.severity == "HIGH"]
 
+    # Risk-guided red teaming: the composition analysis names the families most
+    # worth attacking for this agent (most dangerous path first).
+    from app.platform import attackgraph
+
+    blast = attackgraph.blast_radius(profile).score
+    risk_focus = [f.family for f in attackgraph.risk_guided_focus(profile)]
+
     families, rt_passed, rt_total, rt_errors = ([], 0, 0, [])
     if redteam:
         families, rt_passed, rt_total, rt_errors = _redteam_for(profile.name)
@@ -155,6 +164,8 @@ def run_gate(
         redteam=families,
         redteam_passed=rt_passed,
         redteam_total=rt_total,
+        blast_radius=blast,
+        risk_focus=risk_focus,
         summary=summary,
     )
 
@@ -166,7 +177,8 @@ def render_markdown(result: GateResult) -> str:
         "## 🛡️ AegisAI Security Report",
         "",
         f"**Agent:** `{result.agent}`  ·  **Score:** {result.score}/100 "
-        f"({result.grade})  ·  **Threshold:** {result.threshold}",
+        f"({result.grade})  ·  **Blast radius:** {result.blast_radius}/100  ·  "
+        f"**Threshold:** {result.threshold}",
         "",
         "| Check | Result | Detail |",
         "| --- | --- | --- |",
@@ -178,6 +190,8 @@ def render_markdown(result: GateResult) -> str:
         for fam in result.redteam:
             mark = "✅" if fam.ok else "⚠️"
             lines.append(f"| {fam.family} | {mark} {fam.passed}/{fam.total} |")
+    if result.risk_focus:
+        lines += ["", f"**Risk-guided focus:** {' → '.join(result.risk_focus)}"]
     if result.high_findings:
         lines += ["", "### ⚠️ High-severity findings", ""]
         lines += [f"- {h}" for h in result.high_findings]
