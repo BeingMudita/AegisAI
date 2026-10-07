@@ -140,6 +140,7 @@ aegis scan-agent ./my-agent           #          (or heuristically scan any agen
 aegis generate-policy FinanceAgent    # GENERATE→ a least-privilege aegis.yaml
 aegis policy test aegis.yaml          # TEST    → run the red-team against the policy
 aegis serve                           # PROTECT → deploy behind the gateway
+aegis proxy --config aegis-agent.yaml # PROTECT → front an existing agent (integration layer)
 ```
 
 The scanner reads the real tool registry (risk levels, data categories, approval flags,
@@ -147,6 +148,33 @@ external-destination arguments), scores against a documented deterministic model
 LLM Top 10, and tests in the existing sandbox. It also surfaces in the **Security scanner** dashboard
 page (score, permission graph, generated policy, run-test) and over REST
 (`POST /v1/secure/audit`, `/generate-policy`).
+
+---
+
+## 🔌 Universal runtime integration layer
+
+Take an **existing agent**, don't rewrite its security logic, and route its AI/tool
+interactions through AegisAI. Every framework (OpenAI, LangGraph, MCP, custom) is translated
+into a framework-neutral **Aegis event** and judged by the one security engine — no second copy
+of the firewall, trust, gateway or DLP. Full guide: [docs/proxy.md](docs/proxy.md).
+
+```
+OpenAI ─────┐
+LangGraph ──┤
+MCP ────────┼──▶  Aegis Event Protocol  ──▶  Security Engine  ──▶  ALLOW / APPROVAL / BLOCK
+Custom ─────┘
+```
+
+```bash
+aegis proxy --config aegis-agent.yaml --port 9000
+```
+
+The proxy exposes a drop-in **OpenAI-compatible** endpoint (`POST /v1/chat/completions`) plus
+`/v1/proxy/{tool,output,chat,mcp}`. Point an existing agent's `base_url` at it and nothing else
+changes — input is screened, tool calls are authorized deny-by-default, and secrets/PII are
+redacted on the way out. The [external-agent demo](examples/external-agent/) proves it: the
+*same* agent exfiltrates the customer database on its own, and is blocked the moment its tool
+calls go through the proxy.
 
 ---
 
@@ -418,6 +446,7 @@ AegisAI/
 |---|---|
 | [Developer platform](docs/platform.md) | Plug your own agent in: `aegis.yaml`, the Python SDK, the `/v1/secure` REST gateway and the `aegis` CLI |
 | [Security scanner](docs/scanner.md) | Scan an agent, score it /100, generate a least-privilege policy and red-team it (`aegis audit` / `generate-policy` / `policy test`) |
+| [Integration layer](docs/proxy.md) | Route an existing agent through AegisAI: the event protocol, adapters, the proxy, `aegis proxy` and `aegis-agent.yaml` |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |

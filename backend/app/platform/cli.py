@@ -9,6 +9,7 @@
     aegis scan [path]          # validate a policy file / screen a prompt
     aegis redteam              # run the attack suites against a sandbox
     aegis serve                # PROTECT: start the security gateway
+    aegis proxy                # PROTECT: run the universal integration proxy
     aegis inspect              # open the operator dashboard
 
 Stdlib-only (argparse) so it adds no dependency.
@@ -99,6 +100,55 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if not settings.aegis_api_key and not settings.is_production:
         print("  (dev mode: no AEGIS_API_KEY set — the gateway is open locally)")
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
+    return 0
+
+
+def _cmd_proxy(args: argparse.Namespace) -> int:
+    from app.platform.proxy import server
+    from app.platform.proxy.config import (
+        AegisAgentConfig,
+        ProxyConfigError,
+        UpstreamSection,
+        load_agent_config,
+        sample_agent_yaml,
+    )
+
+    if args.init:
+        path = Path(args.config or "aegis-agent.yaml")
+        if path.exists() and not args.force:
+            print(f"{path} already exists. Use --force to overwrite.")
+            return 1
+        path.write_text(sample_agent_yaml(args.agent), encoding="utf-8")
+        print(f"Wrote {path} for agent '{args.agent}'.")
+        print(f"Edit it, then run:  aegis proxy --config {path}")
+        return 0
+
+    if args.config:
+        try:
+            config = load_agent_config(args.config)
+        except ProxyConfigError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+        if args.upstream:  # CLI flag overrides the file
+            config.upstream.url = args.upstream
+    else:
+        config = AegisAgentConfig(
+            id=args.agent,
+            upstream=UpstreamSection(url=args.upstream),
+        )
+        if args.policy:
+            from pathlib import Path as _Path
+
+            config.policy_path = _Path(args.policy).resolve()
+
+    config.apply_policy()
+    upstream = config.upstream.url or "the built-in AegisAI runtime (local)"
+    print(f"Starting the AegisAI proxy on http://{args.host}:{args.port}")
+    print(f"    agent    : {config.id}")
+    print(f"    upstream : {upstream}")
+    print(f"    policy   : {config.policy_path or '(none applied)'}")
+    print("    routes   : POST /v1/chat/completions · /v1/proxy/{tool,output,chat,mcp}")
+    server.run(config, host=args.host, port=args.port, reload=args.reload)
     return 0
 
 
@@ -199,9 +249,21 @@ def _cmd_generate_policy(args: argparse.Namespace) -> int:
         return 1
     yaml_text = scanner.generate_policy(profile).to_yaml()
     if args.out:
-        Path(args.out).write_text(yaml_text, encoding="utf-8")
-        print(f"Wrote generated policy to {args.out}  (agent: {profile.name})")
-        print(f"Next:  aegis policy test {args.out}")
+        out = Path(args.out)
+        out.write_text(yaml_text, encoding="utf-8")
+        print(f"Wrote generated policy to {out}  (agent: {profile.name})")
+        if args.proxy:
+            from app.platform.proxy.config import sample_agent_yaml
+
+            proxy_path = out.with_name("aegis-agent.yaml")
+            text = sample_agent_yaml(profile.name).replace(
+                "path: ./aegis.yaml", f"path: ./{out.name}"
+            )
+            proxy_path.write_text(text, encoding="utf-8")
+            print(f"Wrote proxy config to {proxy_path}")
+            print(f"Next:  aegis proxy --config {proxy_path}")
+        else:
+            print(f"Next:  aegis policy test {out}")
     else:
         print(yaml_text)
     return 0
@@ -277,6 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen = sub.add_parser("generate-policy", help="generate a least-privilege aegis.yaml")
     p_gen.add_argument("target", help="agent name | aegis.yaml | source directory")
     p_gen.add_argument("--out", default=None, metavar="FILE", help="write to a file (else stdout)")
+    p_gen.add_argument(
+        "--proxy",
+        action="store_true",
+        help="also write an aegis-agent.yaml next to --out (ready for `aegis proxy`)",
+    )
     p_gen.set_defaults(func=_cmd_generate_policy)
 
     p_policy = sub.add_parser("policy", help="validate or test an aegis.yaml")
@@ -309,6 +376,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--port", type=int, default=settings.api_port)
     p_serve.add_argument("--reload", action="store_true")
     p_serve.set_defaults(func=_cmd_serve)
+
+    p_proxy = sub.add_parser(
+        "proxy", help="route an existing agent through AegisAI (the integration layer)"
+    )
+    p_proxy.add_argument("--config", default=None, metavar="FILE", help="an aegis-agent.yaml")
+    p_proxy.add_argument("--agent", default="proxy-agent", help="agent id (without --config)")
+    p_proxy.add_argument("--policy", default=None, metavar="FILE", help="aegis.yaml to enforce")
+    p_proxy.add_argument(
+        "--upstream", default=None, metavar="URL", help="OpenAI-compatible upstream (else local)"
+    )
+    p_proxy.add_argument("--host", default=settings.api_host)
+    p_proxy.add_argument("--port", type=int, default=9000)
+    p_proxy.add_argument("--reload", action="store_true")
+    p_proxy.add_argument("--init", action="store_true", help="write a starter aegis-agent.yaml")
+    p_proxy.add_argument("--force", action="store_true", help="overwrite on --init")
+    p_proxy.set_defaults(func=_cmd_proxy)
 
     p_inspect = sub.add_parser("inspect", help="open the operator dashboard")
     p_inspect.add_argument("--url", default=None)
