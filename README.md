@@ -87,7 +87,7 @@ flowchart TB
 | **Guarded RAG** | Paragraph-level chunks are screened at ingestion: injected chunks are quarantined and their source penalized. They are screened again at retrieval, and untrusted or degraded sources are dropped. |
 | **Agents** | A LangGraph workflow (`guard_input → retrieve → plan ⇄ act → respond → guard_output`). The brain is Ollama when available, else a deterministic rule-based planner. |
 | **Red-team lab** | Runs the attack suites on demand against an isolated runtime. Reports detection, false alarms, a confusion matrix, latency and per-scenario outcomes. |
-| **Threat coverage** | 17 controls mapped to OWASP LLM01–LLM10 and nine ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
+| **Threat coverage** | 18 controls mapped to OWASP LLM01–LLM10 and ten ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
 | **Telemetry** | Every decision is counted and every incident recorded as a security event with structured logs. |
 
 Deeper dive: [architecture](docs/architecture.md) · [threat model](docs/threat-model.md).
@@ -154,7 +154,7 @@ red-team run.
 |---|---|---|
 | LLM01 Prompt Injection | ✅ mitigated | Firewall + normalization, spotlighting, RAG quarantine, gateway, trust |
 | LLM02 Sensitive Information Disclosure | ✅ mitigated | DLP, domain allow-lists, argument firewall, output guard |
-| LLM03 Supply Chain | 🟡 partial | Hash-pinned lockfile, pip-audit and npm audit in CI, Dependabot, pinned images; no SBOM or model signing yet |
+| LLM03 Supply Chain | ✅ mitigated | Hash-pinned lockfile, SHA-pinned CI actions, pip-audit / npm audit / Trivy image scans, CycloneDX SBOMs + AI-BOM, model provenance pins verified before load |
 | LLM04 Data and Model Poisoning | 🟡 partial | Ingest quarantine, source trust (retrieval data only) |
 | LLM05 Improper Output Handling | ✅ mitigated | Output guard, safe rendering, DLP |
 | LLM06 Excessive Agency | ✅ mitigated | Deny-by-default gateway, domains, trust gates, **human approval**, limits, sandbox |
@@ -165,7 +165,8 @@ red-team run.
 
 MITRE ATLAS: AML.T0051.000/.001 (direct and indirect injection), T0054 (jailbreak),
 T0056 (meta-prompt extraction), T0057 (data leakage), T0053 (plugin compromise), T0070
-(RAG poisoning) and T0068 (prompt obfuscation) are mitigated. T0029 (denial of ML
+(RAG poisoning), T0068 (prompt obfuscation) and T0010 (ML supply chain compromise) are
+mitigated. T0029 (denial of ML
 service) is partial.
 
 ### Security guarantees
@@ -433,9 +434,9 @@ AegisAI/
   MITRE ATLAS threat coverage, threat model (built ahead of Phase 10)
 - [ ] **Phase 12** — ~~Paraphrased red-team suite~~ (done: the held-out set), then a
   semantic injection detector
-- [ ] **Phase 13** — Supply chain: ~~lockfile and dependency scanning~~ (done), SBOM,
-  image scanning, model provenance
-  checks (closes LLM03)
+- [x] **Phase 13** — Supply chain: CycloneDX SBOMs and an AI-BOM, Trivy image and
+  Dockerfile scanning, SHA-pinned CI actions, model provenance pins verified before
+  load (closes LLM03) — see [docs/supply-chain.md](docs/supply-chain.md)
 - [ ] **Later** — Organization identity (SSO/OIDC), tenant isolation, per-user delegated
   permissions, real tool adapters behind the approval workflow
 

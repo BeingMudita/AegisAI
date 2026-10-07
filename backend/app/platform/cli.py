@@ -5,6 +5,8 @@
     aegis redteam              # run the attack suites against a sandbox
     aegis serve                # start the security gateway (REST API)
     aegis inspect              # open the operator dashboard
+    aegis verify-models        # check the configured models against their pins
+    aegis aibom [-o file]      # the pinned models as a CycloneDX AI-BOM
 
 Stdlib-only (argparse) so it adds no dependency.
 """
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import sys
 import webbrowser
 from pathlib import Path
@@ -105,6 +108,56 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify_models(args: argparse.Namespace) -> int:
+    from app.agents.brain import OllamaClient
+    from app.supply_chain.provenance import (
+        ProvenanceError,
+        check_ollama,
+        provenance_mode,
+        recent_checks,
+        verified_huggingface_path,
+    )
+
+    settings = get_settings()
+    print(f"Model provenance mode: {provenance_mode()}")
+    if settings.embedding_backend.lower() != "hashing":
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError:
+            print(f"- {settings.embedding_model}: sentence-transformers not installed, skipped")
+        else:
+            with contextlib.suppress(ProvenanceError):  # recorded; reported below
+                verified_huggingface_path(settings.embedding_model)
+    if settings.llm_backend.lower() != "rule_based":
+        client = OllamaClient(
+            settings.ollama_base_url, settings.model_name, settings.ollama_timeout
+        )
+        installed = client.installed_digests()
+        if installed is None:
+            print(f"- {client.model}: Ollama not reachable at {client.base_url}, skipped")
+        else:
+            check_ollama(client.model, installed)
+
+    checks = recent_checks()
+    for check in checks:
+        mark = "OK  " if check.status == "verified" else "FAIL" if not check.allowed else "WARN"
+        print(f"{mark} [{check.kind}] {check.name}: {check.status} - {check.detail}")
+    return 0 if all(c.allowed for c in checks) else 1
+
+
+def _cmd_aibom(args: argparse.Namespace) -> int:
+    from app.supply_chain.aibom import build_aibom
+    from app.supply_chain.manifest import get_manifest
+
+    text = json.dumps(build_aibom(get_manifest()), indent=2) + "\n"
+    if args.output in (None, "-"):
+        sys.stdout.write(text)
+    else:
+        Path(args.output).write_text(text, encoding="utf-8")
+        print(f"Wrote {args.output}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     settings = get_settings()
     parser = argparse.ArgumentParser(
@@ -136,6 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect = sub.add_parser("inspect", help="open the operator dashboard")
     p_inspect.add_argument("--url", default=None)
     p_inspect.set_defaults(func=_cmd_inspect)
+
+    p_verify = sub.add_parser("verify-models", help="check the configured models' pins")
+    p_verify.set_defaults(func=_cmd_verify_models)
+
+    p_aibom = sub.add_parser("aibom", help="print the pinned models as a CycloneDX AI-BOM")
+    p_aibom.add_argument("-o", "--output", default=None, help="output file (default: stdout)")
+    p_aibom.set_defaults(func=_cmd_aibom)
 
     return parser
 

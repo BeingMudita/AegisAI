@@ -15,6 +15,7 @@ from app.api.routes import (
     retrieval,
     security_events,
     sessions,
+    supply_chain,
     tools,
     trust,
 )
@@ -33,3 +34,4 @@ api_router.include_router(redteam.router)
 api_router.include_router(compliance.router)
 api_router.include_router(policies.router)
 api_router.include_router(security_events.router)
+api_router.include_router(supply_chain.router)

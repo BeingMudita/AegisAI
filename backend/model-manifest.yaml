@@ -1,0 +1,44 @@
+# Pinned model artifacts — model provenance (Phase 13, OWASP LLM03).
+#
+# With MODEL_PROVENANCE=enforce (the default) AegisAI uses a model only if it
+# matches an entry here:
+#
+#  * Hugging Face models are downloaded at an exact commit, and every file the
+#    loader reads is checked against its SHA-256 *before* the model is loaded.
+#    Only the listed files are fetched (no ONNX/TF/OpenVINO copies).
+#  * Ollama models are identified by their manifest digest — the ID that
+#    `ollama list` prints. The manifest names every layer (weights, template,
+#    parameters, license) by its SHA-256 and Ollama verifies each layer when it
+#    pulls, so this one digest pins the whole model.
+#
+# Changing a pin is a reviewed change; see docs/supply-chain.md for how the
+# values were obtained and how to update them.
+
+huggingface:
+  - name: sentence-transformers/all-MiniLM-L6-v2
+    revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+    license: Apache-2.0
+    purpose: RAG embeddings (EMBEDDING_MODEL)
+    files:
+      model.safetensors: 53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db
+      config.json: 953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41
+      modules.json: 84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf
+      config_sentence_transformers.json: 061ca9d39661d6c6d6de5ba27f79a1cd5770ea247f8d46412a68a498dc5ac9f3
+      sentence_bert_config.json: fc1993fde0a95c24ec6c022539d41cf6e2f7c9721e5415d6fb6897472a9cd4b7
+      1_Pooling/config.json: 4be450dde3b0273bb9787637cfbd28fe04a7ba6ab9d36ac48e92b11e350ffc23
+      tokenizer.json: be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037
+      tokenizer_config.json: acb92769e8195aabd29b7b2137a9e6d6e25c476a4f15aa4355c233426c61576b
+      special_tokens_map.json: 303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3
+      vocab.txt: 07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3
+
+ollama:
+  - name: llama3.1:8b
+    digest: 46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e
+    weights: sha256:667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29
+    license: LicenseRef-Llama-3.1-Community
+    purpose: agent planner (MODEL_NAME, default)
+  - name: qwen2.5:1.5b
+    digest: 65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b
+    weights: sha256:183715c435899236895da3869489cc30ac241476b4971a20285b1a462818a5b4
+    license: Apache-2.0
+    purpose: agent planner (MODEL_NAME, small-machine option)

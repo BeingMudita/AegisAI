@@ -84,7 +84,11 @@ class SentenceTransformerEmbedder:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.name)
+            from app.supply_chain.provenance import verified_huggingface_path
+
+            # Loaded from the snapshot whose files were just checked against their
+            # pins (raises ProvenanceError under MODEL_PROVENANCE=enforce).
+            self._model = SentenceTransformer(verified_huggingface_path(self.name))
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

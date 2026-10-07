@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     # Where `aegis inspect` points the browser.
     dashboard_url: str = "http://localhost:5173"
 
+    # Supply chain: a model is used only if it matches its pin in the model manifest.
+    # enforce = refuse an unpinned or altered model; warn = use it but record an
+    # ANOMALY event; off = no checks. Relative paths resolve against backend/.
+    model_provenance: str = "enforce"  # enforce | warn | off
+    model_manifest_path: str = "model-manifest.yaml"
+
     # Telemetry
     audit_buffer_size: int = 5000
 
@@ -143,6 +149,11 @@ class Settings(BaseSettings):
         path = base.joinpath(*parts)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def backend_path(self, path: str) -> Path:
+        """``path`` as given if absolute, else resolved against backend/."""
+        p = Path(path)
+        return p if p.is_absolute() else _BACKEND_ROOT / p
 
     @property
     def use_postgres(self) -> bool:

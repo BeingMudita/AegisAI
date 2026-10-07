@@ -211,8 +211,8 @@ same runner.
 
 ## Threat coverage
 
-`app/compliance/catalog.py` is a reviewed, code-maintained mapping of 17 controls to
-the OWASP Top 10 for LLM Applications 2025 and nine MITRE ATLAS techniques. Each
+`app/compliance/catalog.py` is a reviewed, code-maintained mapping of 18 controls to
+the OWASP Top 10 for LLM Applications 2025 and ten MITRE ATLAS techniques. Each
 threat has a status (mitigated / partial / gap), the controls that address it, the
 evidence that should prove it, and a residual-risk statement.
 

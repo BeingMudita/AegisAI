@@ -139,8 +139,23 @@ CONTROLS: list[Control] = [
     Control(
         id="DEPENDENCIES",
         name="Pinned and scanned dependencies",
-        description="Every runtime package is pinned with hashes in requirements.lock; CI checks Python and npm dependencies for known vulnerabilities; Dependabot proposes updates; container images are pinned.",
-        code=["backend/requirements.lock", ".github/workflows/ci.yml", ".github/dependabot.yml"],
+        description="Every runtime package is pinned with hashes in requirements.lock and every CI action to a commit SHA; CI scans Python and npm dependencies and both container images (Trivy: fixable HIGH/CRITICAL fail the build, Dockerfiles checked for misconfiguration) and publishes CycloneDX SBOMs of the code and the images; Dependabot proposes updates.",
+        code=[
+            "backend/requirements.lock",
+            ".github/workflows/ci.yml",
+            ".github/dependabot.yml",
+            ".trivyignore",
+        ],
+    ),
+    Control(
+        id="PROVENANCE",
+        name="Model provenance",
+        description="Models are pinned in a manifest: Hugging Face models by commit and the SHA-256 of every file, verified before loading from that verified copy; Ollama models by manifest digest. Unpinned or altered models are refused (MODEL_PROVENANCE=enforce) and raise an ANOMALY event; the pins are published as a CycloneDX AI-BOM.",
+        code=[
+            "backend/model-manifest.yaml",
+            "backend/app/supply_chain/provenance.py",
+            "backend/app/supply_chain/aibom.py",
+        ],
     ),
 ]
 
@@ -184,10 +199,13 @@ OWASP_LLM_2025: list[ThreatDef] = [
         id="LLM03",
         name="Supply Chain",
         description="Compromised models, datasets, packages or plugins.",
-        status="partial",
-        controls=["DEPENDENCIES", "REDTEAM"],
-        evidence=["test:backend/tests/test_evaluation.py"],
-        residual="Python and npm packages are pinned and scanned, but there is no SBOM, and models pulled through Ollama or Hugging Face are not verified (no provenance or signature checks).",
+        status="mitigated",
+        controls=["DEPENDENCIES", "PROVENANCE", "REDTEAM"],
+        evidence=[
+            "test:backend/tests/test_supply_chain.py",
+            "test:backend/tests/test_evaluation.py",
+        ],
+        residual="Pins prove a model is the reviewed one, not that its publisher is trustworthy: there is no publisher-signature (e.g. Sigstore) verification, and training-data provenance is out of scope. Image scanning covers known CVEs only.",
     ),
     ThreatDef(
         id="LLM04",
@@ -353,6 +371,15 @@ MITRE_ATLAS: list[ThreatDef] = [
         controls=["NORMALIZE", "FIREWALL"],
         evidence=["category:obfuscation", "scenario:AG-12", "scenario:AG-13"],
         residual="Encodings beyond base64 (e.g. ROT13, other languages) are not decoded.",
+    ),
+    ThreatDef(
+        id="AML.T0010",
+        name="ML Supply Chain Compromise",
+        description="Tampered models, model hubs or software dependencies introduced before deployment.",
+        status="mitigated",
+        controls=["PROVENANCE", "DEPENDENCIES"],
+        evidence=["test:backend/tests/test_supply_chain.py"],
+        residual="Integrity is checked against reviewed pins; publisher signatures are not verified.",
     ),
     ThreatDef(
         id="AML.T0029",

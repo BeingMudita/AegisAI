@@ -29,6 +29,7 @@ import structlog
 
 from app.agents.schemas import AgentAction, TurnContext
 from app.config import get_settings
+from app.supply_chain.provenance import check_ollama
 from app.tools.schemas import ToolCallResult
 
 logger = structlog.get_logger("aegisai.agents")
@@ -203,6 +204,16 @@ class OllamaClient:
         names = {m.get("name", "") for m in resp.json().get("models", [])}
         return self.model in names or f"{self.model}:latest" in names
 
+    def installed_digests(self) -> dict[str, str] | None:
+        """Installed model name → manifest digest, or None if the server can't be asked."""
+        try:
+            resp = httpx.get(f"{self.base_url}/api/tags", timeout=2.0)
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return None
+        return {m["name"]: m["digest"] for m in models if m.get("name") and m.get("digest")}
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -357,6 +368,13 @@ def get_brain() -> AgentBrain:
         return RuleBasedBrain()
     client = OllamaClient(settings.ollama_base_url, settings.model_name, settings.ollama_timeout)
     if backend == "ollama" or client.is_available():
-        return OllamaBrain(client)
+        # Supply chain: only a model whose digest matches its pin may plan tool calls.
+        check = check_ollama(client.model, client.installed_digests())
+        if check.allowed:
+            return OllamaBrain(client)
+        logger.warning(
+            "ollama_model_refused", model=client.model, status=check.status, fallback="rule_based"
+        )
+        return RuleBasedBrain()
     logger.warning("ollama_unavailable", model=settings.model_name, fallback="rule_based")
     return RuleBasedBrain()
