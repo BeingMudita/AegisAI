@@ -399,6 +399,84 @@ export interface SuiteInfo {
   agents: { scenarios: number; items: { id: string; title: string; agent: string }[] };
 }
 
+// --------------------------------------------------------------- scanner
+export type RiskSeverity = "LOW" | "MEDIUM" | "HIGH";
+
+export interface ScanToolProfile {
+  name: string;
+  risk_level: string;
+  data_category: string | null;
+  external: boolean;
+  domain_kind: string | null;
+  requires_approval: boolean;
+  min_trust: number;
+  allowed: boolean;
+  enabled: boolean;
+  source: string;
+}
+
+export interface ScanDataSource {
+  name: string;
+  kind: string;
+  trust: number | null;
+  untrusted: boolean;
+}
+
+export interface ScanDataFlow {
+  label: string;
+  sensitive: boolean;
+  external: boolean;
+  risk: RiskSeverity;
+}
+
+export interface AgentProfile {
+  name: string;
+  llm: string;
+  aegis_integrated: boolean;
+  source: string;
+  tools: ScanToolProfile[];
+  data_sources: ScanDataSource[];
+  external_destinations: string[];
+  allowed_tools: string[];
+  allowed_domains: string[];
+  sensitive_data: string[];
+  trust_minimum: number;
+  data_flows: ScanDataFlow[];
+  notes: string[];
+}
+
+export interface RiskFinding {
+  category: string;
+  severity: RiskSeverity;
+  title: string;
+  detail: string;
+  fix: string | null;
+  owasp: string | null;
+}
+
+export interface SecurityReport {
+  agent: string;
+  score: number;
+  grade: string;
+  findings: RiskFinding[];
+  generated_policy: string;
+  owasp: { id: string; name: string; status: string }[];
+  attack_results: Record<string, unknown> | null;
+  profile: AgentProfile;
+}
+
+export interface ScannerPolicy {
+  agent: string;
+  aegis_yaml: string;
+}
+
+export interface ScannerTestResult {
+  agent: string;
+  passed: number;
+  total: number;
+  scenarios: ScenarioResult[];
+}
+
 // ------------------------------------------------------------ threat coverage
 export type CoverageStatus = "mitigated" | "partial" | "gap";
 

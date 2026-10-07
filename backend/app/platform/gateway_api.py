@@ -155,6 +155,41 @@ def secure_scan(
     return get_firewall().inspect(body.text, body.channel, context="gateway scan")
 
 
+class AuditRequest(BaseModel):
+    agent: str
+
+
+class GeneratedPolicy(BaseModel):
+    agent: str
+    aegis_yaml: str
+
+
+@router.post("/audit")
+def secure_audit(body: AuditRequest, _principal: str = Depends(require_gateway_access)) -> dict:
+    """Profile a known agent and return its security report (score + findings + policy)."""
+    from app.platform import scanner
+
+    try:
+        return scanner.audit(body.agent).model_dump()
+    except scanner.ScannerError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/generate-policy", response_model=GeneratedPolicy)
+def secure_generate_policy(
+    body: AuditRequest, _principal: str = Depends(require_gateway_access)
+) -> GeneratedPolicy:
+    """Generate a least-privilege aegis.yaml for a known agent."""
+    from app.platform import scanner
+
+    try:
+        profile = scanner.profile_known_agent(body.agent)
+    except scanner.ScannerError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    yaml_text = scanner.generate_policy(profile).to_yaml()
+    return GeneratedPolicy(agent=profile.name, aegis_yaml=yaml_text)
+
+
 @router.get("/agents", response_model=list[AgentAllowance])
 def secure_agents(_principal: str = Depends(require_gateway_access)) -> list[AgentAllowance]:
     """List the agents the gateway knows about and what each is allowed to do."""

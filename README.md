@@ -128,6 +128,28 @@ curl -s localhost:8000/v1/secure/tool -H 'content-type: application/json' \
 
 ---
 
+## 🔎 Security lifecycle — scan, generate, test, protect
+
+Point AegisAI at an agent and it builds a security profile, scores it out of 100, generates a
+least-privilege policy and red-teams it — the **Discover → Assess → Configure → Test** front half of
+the lifecycle. Full guide: [docs/scanner.md](docs/scanner.md).
+
+```bash
+aegis audit FinanceAgent              # SCAN   → score /100 + 7-category risk report + fixes
+aegis scan-agent ./my-agent           #          (or heuristically scan any agent repo)
+aegis generate-policy FinanceAgent    # GENERATE→ a least-privilege aegis.yaml
+aegis policy test aegis.yaml          # TEST    → run the red-team against the policy
+aegis serve                           # PROTECT → deploy behind the gateway
+```
+
+The scanner reads the real tool registry (risk levels, data categories, approval flags,
+external-destination arguments), scores against a documented deterministic model mapped to the OWASP
+LLM Top 10, and tests in the existing sandbox. It also surfaces in the **Security scanner** dashboard
+page (score, permission graph, generated policy, run-test) and over REST
+(`POST /v1/secure/audit`, `/generate-policy`).
+
+---
+
 ## 🖥️ Product tour
 
 <table>
@@ -395,6 +417,7 @@ AegisAI/
 | Document | For |
 |---|---|
 | [Developer platform](docs/platform.md) | Plug your own agent in: `aegis.yaml`, the Python SDK, the `/v1/secure` REST gateway and the `aegis` CLI |
+| [Security scanner](docs/scanner.md) | Scan an agent, score it /100, generate a least-privilege policy and red-team it (`aegis audit` / `generate-policy` / `policy test`) |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |
