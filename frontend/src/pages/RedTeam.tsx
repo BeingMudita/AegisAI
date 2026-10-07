@@ -360,7 +360,7 @@ export default function RedTeam() {
           {ho && (
             <Card
               title="Held-out set"
-              subtitle={`${ho.cases} inputs the rules were never tuned on: the honest estimate of how detection generalises`}
+              subtitle={`${ho.cases} inputs nothing was tuned or trained on: the honest estimate of how detection generalises`}
               icon={FlaskConical}
             >
               <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -380,8 +380,9 @@ export default function RedTeam() {
                 ))}
               </dl>
               <p className="mt-4 text-xs leading-relaxed text-ink-2">
-                Signature rules generalise to obfuscation, delimiter tricks and tool abuse, but paraphrased attacks that
-                avoid the vocabulary get through. Those are what the tool gateway, trust scoring and human approval are for.
+                Signature rules generalise to obfuscation, delimiter tricks and tool abuse but miss paraphrased attacks
+                that avoid their vocabulary. The semantic layer (rule SEM-001) catches many of those and flags them for
+                review; what still gets through is what the tool gateway, trust scoring and human approval are for.
                 Filter the cases below for the misses and false alarms.
               </p>
               <div className="mt-4">

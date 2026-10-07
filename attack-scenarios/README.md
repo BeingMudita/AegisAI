@@ -26,16 +26,31 @@ names — so the false-positive rate is meaningful. A few malicious cases are
 paraphrases a signature layer is expected to miss; they stay in to keep the
 numbers honest.
 
-## `firewall_holdout.yaml` — 53 held-out inputs
+## `firewall_paraphrase.yaml` — 103 paraphrase development inputs
 
-Same format (`HO-…` malicious, `HB-…` benign). The rules were tuned while looking at
-`firewall_cases.yaml`, so its scores are optimistic; this set was written afterwards —
-new phrasings of every attack family plus hard benign look-alikes — and is **never used
-for tuning**. Every run scores it separately; CI checks that it stays disjoint from the
-development set but sets no floor on it. If you change a rule because of a held-out
-case, move that case to `firewall_cases.yaml` and write a fresh one.
+Same format (`PP-…`). These are attacks phrased without the rules' trigger words,
+plus hard benign look-alikes. Together with `firewall_cases.yaml` they are the only
+training data for the firewall's semantic layer
+(`python evaluation/train_semantic.py`). After editing either file, retrain the
+model; CI fails while the shipped model is stale.
 
-## `agent_scenarios.yaml` — 21 end-to-end scenarios
+## `firewall_holdout.yaml` (v1, 53) and `firewall_holdout_v2.yaml` (v2, 55) — held-out inputs
+
+Same format (`HO-…` / `HB-…` in v1, `H2-…` in v2). The rules were tuned on
+`firewall_cases.yaml` and the semantic layer was trained on the development sets, so
+those scores are optimistic. The held-out sets are new phrasings of every attack
+family plus hard benign look-alikes, and are **never used for tuning or training**.
+
+- **v1** was written after the rules.
+- **v2** was written after the semantic layer was frozen, which makes it the cleaner
+  estimate for that layer: v1's misses had been seen while the layer was built.
+
+Every run scores the held-out sets separately. CI checks that they share no id or
+text with any development set, but sets no floor on them. If you change the
+detector because of a held-out case, move that case to a development set and write
+a fresh one.
+
+## `agent_scenarios.yaml` — 22 end-to-end scenarios
 
 Each scenario runs a full agent turn in a fresh, isolated runtime and asserts
 the outcome: whether the turn was blocked, which tools executed or were denied

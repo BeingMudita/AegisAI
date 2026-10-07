@@ -1,5 +1,107 @@
 # Changelog
 
+## 2026-10-07 — Phases 10, 12 and 13: quotas and retention, semantic detection, supply chain
+
+This also merges `main` into this branch, which brings in the developer platform
+(SDK, `/v1/secure` gateway, CLI, `aegis.yaml`) and the four-configuration experiment.
+The merge needed three follow-up fixes:
+
+- the gateway now charges trust to the calling principal;
+- the gateway compares its API key in constant time;
+- the experiment's "trust off" configurations also bypass the per-principal trust
+  check.
+
+No new runtime dependencies were added.
+
+### Phase 13 — Supply chain (closes OWASP LLM03)
+
+- **Model provenance.** `backend/model-manifest.yaml` pins each model:
+  - the embedder to a Hugging Face commit and the SHA-256 of all 10 files it loads;
+  - the Ollama planners by manifest digest.
+
+  The embedder downloads only the pinned files at that commit, hashes them and loads
+  from the verified copy. The brain refuses an Ollama model whose digest differs and
+  falls back to the rule-based planner. `MODEL_PROVENANCE=enforce|warn|off`. A failed
+  check raises an `ANOMALY` event. The real download was verified: all 10 files match.
+- **AI-BOM.** `aegis aibom` and `GET /api/supply-chain/aibom` export the pinned models
+  as CycloneDX 1.6 `machine-learning-model` components with per-file hashes. The file
+  validates against the strict 1.6 schema. `aegis verify-models` and
+  `GET /api/supply-chain` report the checks.
+- **CI.** A new `supply-chain` job:
+  - generates CycloneDX SBOMs for Python and npm dependencies and for both images,
+    plus the AI-BOM;
+  - runs Trivy on the Dockerfiles (misconfiguration) and on both images, failing on a
+    fixable HIGH or CRITICAL; reviewed exceptions go in `.trivyignore`.
+
+  Every GitHub Action is now pinned to a commit SHA.
+- **Images.** The dashboard runs as non-root on `nginx-unprivileged` 1.30. Its
+  container port is now 8080 (Trivy DS-0002).
+
+### Phase 10 — Retention and quotas (closes OWASP LLM10)
+
+- **Per-principal budgets.**
+  - Daily turn, token and cost limits per user or API caller, set in
+    `default_policies.yaml` with role and principal overrides.
+  - A turn is reserved atomically before it runs (row lock on Postgres) and charged
+    afterwards with the tokens Ollama reports. Tokens are estimated for the
+    rule-based planner.
+  - Each LLM call is capped by `max_output_tokens`.
+  - A used-up budget returns 429 with `Retry-After`. The sessions route refuses
+    before the request ID is spent, and the first refusal of the day raises an
+    `ANOMALY` event.
+  - New endpoints: `GET /api/usage/me`, and `GET /api/usage` for staff. The dashboard
+    shows the tokens each turn used.
+- **Session expiry.** A session idle for longer than `SESSION_IDLE_MINUTES` (720)
+  becomes `EXPIRED` and refuses new messages.
+- **Retention.** A sweeper expires idle sessions and deletes ended sessions, audit
+  events and budget rows past `SESSION_/AUDIT_/USAGE_RETENTION_DAYS`. On Postgres an
+  advisory lock lets only one worker sweep at a time. `aegis retention` runs one pass.
+- **Pagination.** Keyset cursors on `/api/sessions` and `/api/security-events`.
+- Migration `0005`: the `EXPIRED` status, `last_activity_at` (backfilled from turns),
+  and `usage_budgets`.
+
+### Phase 12 — Semantic injection detection
+
+- **Paraphrase development set.** `firewall_paraphrase.yaml` has 103 cases: 53
+  attacks without the rules' trigger words and 50 hard look-alikes. The rules alone
+  catch 24.5% of its attacks.
+- **Semantic layer.** `app/firewall/semantic.py` is an L2 logistic regression over
+  hashed, stemmed word n-grams and the input channel, in pure Python.
+  `evaluation/train_semantic.py` trains it on the development sets only. Five-fold
+  cross-validation of rules-OR-semantic picks the L2 strength and the threshold at
+  ≤ 5% false positives. A test fails when the model is stale. The layer only scores
+  text the rules allow, and it raises ALLOW to FLAG, never to BLOCK.
+- **Fresh held-out set.** `firewall_holdout_v2.yaml` has 55 cases. It was written
+  after the model was frozen in commit `bab8086`, and the model was not changed
+  afterwards.
+- **Results (rules → + semantic).** Recall changed as follows:
+
+  | Data | Recall | FPR |
+  |---|---|---|
+  | Development, out-of-fold | 59.2% → 78.6% | 2.4% → 4.8% |
+  | Held-out v1 | 48.4% → 80.6% | 9.1% → 13.6% |
+  | **Held-out v2** | **27.3% → 60.6%** | **0% → 4.5%** |
+
+  On held-out v2 no benign case was blocked. The v1 gain is an upper bound, because
+  v1's misses were visible while the layer was being built. `run_eval.py` reports
+  the ablation for every suite.
+
+### Validation
+
+- Memory mode: 252 passed, 11 skipped. Postgres mode (`AEGIS_TEST_POSTGRES=1`):
+  263 passed. The migration-matches-models check passes with `0005`.
+- New tests:
+  - `test_supply_chain.py`: pins, tampering, enforce/warn/off, Ollama digests, brain
+    fallback, AI-BOM, API.
+  - `test_quotas_retention.py`: budgets, metering, 429s, expiry, retention, cursors,
+    on both backends.
+  - `test_semantic.py`: model freshness, held-out isolation, never-block,
+    determinism.
+- Ruff and mypy pass. The frontend type-checks, its 21 unit tests pass, and it builds.
+- Evaluation: development recall 100%, precision 98.0%, false-positive rate 3.0%.
+  Held-out (v1 + v2) recall 70.3% at 9.1% false-positive rate. Agent scenarios
+  22 / 22. The four-configuration table is unchanged.
+
 ## 2026-10-04 — Code review fixes: security, correctness, performance, supply chain
 
 ### What changed

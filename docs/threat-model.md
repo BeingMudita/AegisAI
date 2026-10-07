@@ -99,7 +99,7 @@ provider's infrastructure.
 
 | Threat | Adversary | OWASP / ATLAS | Mitigations | Status |
 |---|---|---|---|---|
-| Direct prompt injection and jailbreaks | A1 | LLM01 · AML.T0051.000, T0054 | Firewall with obfuscation normalization; trust penalty and suspension (for the attacking principal) | Mitigated; paraphrases can pass the firewall (held-out recall 45%) |
+| Direct prompt injection and jailbreaks | A1 | LLM01 · AML.T0051.000, T0054 | Firewall with obfuscation normalization and a learned semantic layer; trust penalty and suspension (for the attacking principal) | Mitigated; some paraphrases still pass the firewall (fresh held-out recall 61%) |
 | Indirect injection via documents or web pages | A2 | LLM01 · AML.T0051.001, T0070 | Ingest quarantine; source trust; output firewall withholds tool output; spotlighting with escaped `<data>` blocks | Mitigated; prose-only injections can pass |
 | Obfuscated payloads (leetspeak, zero-width, homoglyph, base64) | A1, A2 | AML.T0068 | NFKC + invisible-char stripping, homoglyph map, de-leet, de-space, base64 decode | Mitigated for these encodings |
 | Excessive agency: model calls tools it shouldn't | A3 | LLM06 · AML.T0053 | Deny-by-default policies; global kill switches; domain allow-lists; trust gates; rate limits; human approval; sandboxed tools | Mitigated |
@@ -145,13 +145,17 @@ in both memory and PostgreSQL mode.
 
 Stated plainly, as on the Threat coverage page:
 
-- **Paraphrased injections.** The firewall is signature-based and misses attacks
-  without trigger words. On the development set it was tuned on, two of 43 attacks
-  pass (FW-007, FW-074). On the held-out set it never saw, 17 of 31 pass
-  (recall 45%), and 2 of 22 benign look-alikes are blocked. Obfuscation, delimiter
-  and tool-abuse cases still generalise; paraphrased role-play, prompt extraction
-  and indirect instructions do not. G1–G5 bound what such an attack can achieve. A
-  semantic detector is on the roadmap.
+- **Paraphrased injections.** Signature rules miss attacks without trigger words.
+  The semantic layer catches many of them and flags them for review. On held-out v2,
+  which was written after the semantic layer was frozen, firewall recall is 61%
+  (rules alone: 27%). One of 22 benign look-alikes is flagged and none is blocked.
+  The attacks that still pass are mostly:
+  - authority or permission claims;
+  - powerful personas and hypothetical framings;
+  - instructions disguised as notices in retrieved text.
+
+  G1–G5 bound what such an attack can achieve; see
+  [evaluation/README.md](../evaluation/README.md#semantic-layer-phase-12).
 - **Pattern-based DLP.** Secrets without a recognisable shape can pass.
 - **Per-agent policies.** Trust is tracked per principal, but policies still belong
   to the agent: every user of FinanceAgent gets FinanceAgent's tools. Delegated user

@@ -5,9 +5,11 @@ in-process and writes a report:
 
 * **Firewall benchmark** — labelled malicious / benign texts → detection
   precision, recall, F1, false-positive rate, per-category rates, latency.
-  Scored twice: on the development set the rules were tuned on
-  (``firewall_cases.yaml``) and on a held-out set they never saw
-  (``firewall_holdout.yaml``) — the held-out numbers are the honest estimate.
+  Scored on the development set the rules were tuned on
+  (``firewall_cases.yaml``) and on the held-out sets nothing was tuned on
+  (``firewall_holdout*.yaml``) — the held-out numbers are the honest estimate.
+* **Semantic-layer ablation** — every firewall suite scored with the signature
+  rules alone and with the learned semantic layer added (Phase 12).
 * **Agent scenarios** — full guarded agent turns (deterministic rule-based
   brain, fresh isolated runtime per scenario) checked against expected
   outcomes: what was blocked, which tools ran, were refused (and where) or
@@ -62,6 +64,38 @@ def run_holdout_benchmark() -> dict[str, Any] | None:
         return runner.run_firewall_benchmark(cases).model_dump(mode="json")
 
 
+# Each suite, and whether the semantic layer learned from it.
+ABLATION_SUITES = (
+    ("firewall_cases.yaml", "development (rules tuned; semantic trained)"),
+    ("firewall_paraphrase.yaml", "paraphrase development (semantic trained)"),
+    ("firewall_holdout.yaml", "held-out v1 (seen while building the semantic layer)"),
+    ("firewall_holdout_v2.yaml", "held-out v2 (written after the semantic layer froze)"),
+)
+
+
+def run_semantic_ablation() -> list[dict[str, Any]]:
+    """Rules alone vs rules + semantic layer on every firewall suite that exists."""
+    rows = []
+    for name, role in ABLATION_SUITES:
+        if not (runner.suites_dir() / name).exists():
+            continue
+        cases = runner._load(name, "cases")
+        row: dict[str, Any] = {"suite": name, "role": role, "cases": len(cases)}
+        with isolated_audit_log():
+            for key, semantic in (("rules", False), ("semantic", True)):
+                report = runner.run_firewall_benchmark(cases, semantic=semantic)
+                row[key] = {
+                    "recall": report.recall,
+                    "precision": report.precision,
+                    "false_positive_rate": report.false_positive_rate,
+                    "benign_blocked": sum(
+                        1 for r in report.results if not r.malicious and r.action == "BLOCK"
+                    ),
+                }
+        rows.append(row)
+    return rows
+
+
 def run_agent_scenarios(scenarios: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     with isolated_audit_log():
         return runner.run_agent_scenarios(scenarios).model_dump(mode="json")
@@ -87,7 +121,10 @@ def _metric_rows(fw: dict[str, Any]) -> list[str]:
 
 
 def render_markdown(
-    fw: dict[str, Any], ag: dict[str, Any], holdout: dict[str, Any] | None = None
+    fw: dict[str, Any],
+    ag: dict[str, Any],
+    holdout: dict[str, Any] | None = None,
+    ablation: list[dict[str, Any]] | None = None,
 ) -> str:
     c = fw["confusion"]
     lines = [
@@ -149,14 +186,37 @@ def render_markdown(
             "## Firewall benchmark — held-out set",
             "",
             f"{holdout['cases']} labelled inputs ({holdout['malicious']} malicious, "
-            f"{holdout['benign']} benign) from `firewall_holdout.yaml`: new phrasings of each "
-            "attack family and hard benign look-alikes, written after the rules and never used "
-            "to tune them. This is the better estimate of how the signature layer generalises.",
+            f"{holdout['benign']} benign) from the held-out files (`firewall_holdout*.yaml`): "
+            "new phrasings of each attack family and hard benign look-alikes, never used to tune "
+            "the rules or train the semantic layer. This is the better estimate of how the "
+            "firewall generalises.",
             "",
             *_metric_rows(holdout),
         ]
         _rows("Held-out: missed attacks", holdout["misses"])
         _rows("Held-out: false positives", holdout["false_positives"])
+
+    if ablation:
+        lines += [
+            "",
+            "## Semantic layer ablation",
+            "",
+            "Each suite scored by the signature rules alone, then with the learned semantic "
+            "layer added (it can raise ALLOW to FLAG, never to BLOCK). Its scores on suites it "
+            "was trained on are optimistic; held-out v2 is the cleanest estimate.",
+            "",
+            "| Suite | Cases | Recall (rules → +semantic) | FPR (rules → +semantic) "
+            "| Benign blocked |",
+            "|---|--:|---|---|--:|",
+        ]
+        for row in ablation:
+            r, s = row["rules"], row["semantic"]
+            lines.append(
+                f"| `{row['suite']}` — {row['role']} | {row['cases']} | "
+                f"{r['recall']:.1%} → **{s['recall']:.1%}** | "
+                f"{r['false_positive_rate']:.1%} → {s['false_positive_rate']:.1%} | "
+                f"{s['benign_blocked']} |"
+            )
 
     lines += [
         "",
@@ -184,14 +244,17 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging("CRITICAL")
     fw = run_firewall_benchmark()
     holdout = run_holdout_benchmark()
+    ablation = run_semantic_ablation()
     ag = run_agent_scenarios()
 
     args.out.mkdir(parents=True, exist_ok=True)
-    results = {"firewall": fw, "holdout": holdout, "agents": ag}
+    results = {"firewall": fw, "holdout": holdout, "semantic_ablation": ablation, "agents": ag}
     (args.out / "results.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    (args.out / "report.md").write_text(render_markdown(fw, ag, holdout), encoding="utf-8")
+    (args.out / "report.md").write_text(
+        render_markdown(fw, ag, holdout, ablation), encoding="utf-8"
+    )
 
     print(
         f"Firewall: precision {fw['precision']:.1%}, recall {fw['recall']:.1%}, "
@@ -201,6 +264,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Held-out: precision {holdout['precision']:.1%}, recall {holdout['recall']:.1%}, "
             f"FPR {holdout['false_positive_rate']:.1%}"
+        )
+    for row in ablation:
+        r, s = row["rules"], row["semantic"]
+        print(
+            f"  {row['suite']:26s} recall {r['recall']:.1%} -> {s['recall']:.1%}, "
+            f"FPR {r['false_positive_rate']:.1%} -> {s['false_positive_rate']:.1%}"
         )
     print(f"Agents:   {ag['passed']}/{ag['scenarios']} scenarios passed")
     for r in ag["results"]:

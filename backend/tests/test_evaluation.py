@@ -35,7 +35,11 @@ def test_holdout_set_is_kept_apart_from_the_development_set() -> None:
     holdout = runner.load_holdout_cases()
     ids = [c["id"] for c in holdout]
     assert holdout and len(set(ids)) == len(ids)
-    development = {c["text"] for c in runner.load_firewall_cases()}
-    assert not development & {c["text"] for c in holdout}
+    # Neither the rules' development set nor the semantic layer's training data
+    # may share a case (by id or by text) with any held-out file.
+    development = runner.load_firewall_cases() + runner.load_paraphrase_cases()
+    assert not {c["text"] for c in development} & {c["text"] for c in holdout}
+    assert not {c["id"] for c in development} & set(ids)
+    assert {c["id"][:3] for c in holdout} == {"HO-", "HB-", "H2-"}  # v1 and v2
     result = run_eval.run_holdout_benchmark()
     assert result is not None and result["cases"] == len(holdout)

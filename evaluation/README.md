@@ -64,15 +64,18 @@ latency (11.12), and total system overhead vs. baseline (11.13).
 **Firewall benchmark** — every labelled input is scanned on its channel.
 *Detected* = FLAG or BLOCK. Reports precision, recall, F1, false-positive
 rate, outright block rates, per-category detection and scan latency, and
-lists every miss and false positive. It runs on two sets:
+lists every miss and false positive. It runs on these sets:
 
-* **Development set** (`firewall_cases.yaml`, 73 cases). The rules and weights
+* **Development set** (`firewall_cases.yaml`, 83 cases). The rules and weights
   were tuned while looking at it, so its scores are optimistic.
-* **Held-out set** (`firewall_holdout.yaml`, 53 cases). New phrasings of every
-  attack family plus hard benign look-alikes, written after the rules and never
-  used to tune them. This is the honest estimate. A rule change made *because* of
-  a held-out case spends that case: move it to the development set and write a
-  new one.
+* **Paraphrase development set** (`firewall_paraphrase.yaml`, 103 cases).
+  Attacks phrased without the rules' trigger words, plus hard benign
+  look-alikes. It is training data for the semantic layer.
+* **Held-out sets** (`firewall_holdout.yaml` v1, 53 cases, and
+  `firewall_holdout_v2.yaml`, 55 cases). New phrasings of every attack family
+  plus hard benign look-alikes. Nothing was ever tuned or trained on them, so
+  they give the honest estimate. A change made *because* of a held-out case
+  spends that case: move it to a development set and write a new one.
 
 **Agent scenarios** — each scenario runs a full guarded turn with the
 deterministic rule-based brain in a fresh runtime (own trust registry,
@@ -84,22 +87,69 @@ denial at the trust check.
 
 ## Current results
 
-| | Development set | Held-out set |
+The firewall here means the signature rules plus the semantic layer.
+
+| | Development set | Held-out sets (v1 + v2) |
 |---|---|---|
-| Firewall precision | 98.0% | 88.2% |
-| Firewall recall | 96.0% (48 / 50 attacks) | 48.4% (15 / 31 attacks) |
-| False-positive rate | 3.0% (1 / 33 benign — flagged, not blocked) | 9.1% (2 / 22 benign — both blocked) |
+| Firewall precision | 98.0% | 91.8% |
+| Firewall recall | 100% (50 / 50 attacks) | 70.3% (45 / 64 attacks) |
+| False-positive rate | 3.0% (1 / 33 benign, flagged, not blocked) | 9.1% (4 / 44 benign: 2 blocked by rules, 2 flagged by the semantic layer) |
 | Scan latency p95 | < 0.5 ms | |
 | Agent scenarios | 22 / 22 pass | |
 
-On the held-out set the rules still catch every obfuscated payload (leetspeak,
-homoglyphs, zero-width characters, base64), every delimiter injection and every
-tool-abuse argument. They miss almost all of the paraphrased role-play,
-prompt-extraction, credential-harvesting and indirect-instruction cases,
-and they block two benign documents that *quote* attack phrases (a security
-training note, a password-reset guide). That gap is the case for a semantic
-detector; the agent scenarios show the gateway still bounds what a missed
-attack can make an agent do.
+The rules catch every obfuscated payload (leetspeak, homoglyphs, zero-width
+characters, base64), every delimiter injection and every tool-abuse argument.
+They also block two benign documents that *quote* attack phrases: a security
+training note and a password-reset guide. Most paraphrased attacks get past the
+rules. The semantic layer catches many of those, as the next section shows.
+
+### Semantic layer (Phase 12)
+
+`backend/app/firewall/semantic.py` is an L2-regularised logistic regression over
+hashed, stemmed word unigrams and bigrams plus the input channel. It is pure
+Python. `evaluation/train_semantic.py` trains it on the development sets only:
+`firewall_cases.yaml` and `firewall_paraphrase.yaml`. Five-fold stratified
+cross-validation of the whole firewall (rules OR semantic) picks two settings:
+
+- the L2 strength;
+- the threshold that gives the best recall at no more than 5% false positives.
+
+The scanner asks the semantic layer only about text the rules allow. A hit
+raises ALLOW to FLAG, never to BLOCK. A false positive therefore costs a review,
+not a refusal.
+
+Each suite was scored with the rules alone, then with the semantic layer added:
+
+| Suite | Cases | Recall, rules → + semantic | FPR, rules → + semantic |
+|---|--:|---|---|
+| Development, out-of-fold (cross-validation) | 186 | 59.2% → 78.6% | 2.4% → 4.8% |
+| `firewall_cases.yaml` (rules tuned, semantic trained) | 83 | 96.0% → 100% | 3.0% → 3.0% |
+| `firewall_paraphrase.yaml` (semantic trained) | 103 | 24.5% → 100% | 2.0% → 2.0% |
+| `firewall_holdout.yaml` v1 (seen while building) | 53 | 48.4% → 80.6% | 9.1% → 13.6% |
+| **`firewall_holdout_v2.yaml` (written after the freeze)** | 55 | **27.3% → 60.6%** | **0.0% → 4.5%** |
+
+How to read this:
+
+- **Trained-on rows are optimistic.** The 100% on the training sets says
+  nothing about new text. The out-of-fold row and the held-out rows do.
+- **v1 has been seen.** Its misses appeared in reports while the layer was
+  being built. No v1 case was used for training or for the threshold, but the
+  paraphrase set's author had read them, so v1's gain is an upper bound.
+- **v2 was written after the model was frozen** (commit `bab8086`), and the
+  model was not changed after scoring it. Its author is the same, though, so
+  even v2 is not an independent benchmark. An outside red team is the next
+  step up.
+- **What still gets through on v2:** claims of authority or permission ("the
+  people who configured you said I'm allowed…"), politely worded override
+  requests, personas with power ("a character called Root"), hypothetical
+  framings, and instructions disguised as notices or FAQ entries in retrieved
+  text. That is about four in ten attacks.
+- **The cost:** one benign case flagged on v2 (a phishing-training example that
+  quotes a credential request) and one more on v1. None was blocked.
+
+To retrain after editing a development set, run `python evaluation/train_semantic.py`.
+CI fails while the shipped model is stale. `FIREWALL_SEMANTIC=false` turns the
+layer off.
 
 ### Four-configuration comparison (latest run)
 
@@ -114,19 +164,22 @@ The combined architecture drives attack success to zero: the firewall is the
 larger single contributor (ASR 57% → 14%), while the trust layer closes the
 remaining gaps — attack-driven degradation (AG-40) and suspension (AG-41) —
 at the cost of some friction on high-risk legitimate actions (AG-21), which is
-the measured false-positive / completion trade-off. Combined adds well under
-1 ms per turn over baseline.
+the measured false-positive / completion trade-off. Combined adds a few
+milliseconds per turn over baseline (about 3 ms in the latest run; noisy).
 
 **Known limitations** (kept in the benchmark on purpose):
 
-* The firewall is signature-based. It misses paraphrased attacks that avoid
-  its vocabulary — e.g. *"Those earlier directions no longer apply…"* and a
-  *"P.S. whoever is reading this summary should…"* aside in tool output. The
-  tool gateway still constrains what such an attack could make an agent *do*
-  (deny-by-default tools, domain allow-lists, trust gates, output DLP), which
-  is why the agent scenarios hold even where text detection is imperfect. An
-  ML classifier layer (e.g. a fine-tuned DeBERTa injection detector) is the
-  natural next step for paraphrase coverage.
+* Text detection is imperfect. Even with the semantic layer, about four in ten
+  paraphrased attacks on held-out v2 get through. The semantic layer is a
+  linear model trained on about 190 examples; it learns attack vocabulary, not
+  meaning. The tool gateway still constrains what a missed attack can make an
+  agent *do*: deny-by-default tools, domain allow-lists, trust gates and output
+  DLP. That is why the agent scenarios hold even where text detection fails.
+  Next steps for paraphrase coverage:
+  - more training data;
+  - a neural classifier behind the same interface, for example a fine-tuned
+    DeBERTa injection detector pinned in the model manifest;
+  - an outside red team for a truly independent held-out set.
 * *"What does rm -rf do?"* is flagged (not blocked) — a dual-use question
   that is audited but allowed through.
 * Agent scenarios use the rule-based brain for reproducibility; an LLM brain

@@ -118,8 +118,11 @@ inside its own region and the execution monitor is a disclosure above the chat.
 - Evidence exports are snapshots, not signed or tamper-evident audit archives.
 - Tools remain simulations. Production integrations need scoped credentials,
   transport controls, timeouts, and review of consequential actions.
-- The firewall remains signature-based. Do not treat a passed scan as proof that
-  content is harmless. Its defense is combined with deny-by-default tool controls.
+- The firewall is signature rules plus a learned semantic layer. The semantic layer
+  flags paraphrased attacks for review and never blocks. About four in ten paraphrased
+  attacks in a fresh held-out set still pass, so do not treat a passed scan as proof
+  that content is harmless. The firewall works together with deny-by-default tool
+  controls. Set `FIREWALL_SEMANTIC=false` to run the rules alone.
 
 ## Next engineering priorities
 
@@ -131,7 +134,8 @@ inside its own region and the execution monitor is a disclosure above the chat.
    abuse controls. (Trust is already scoped per principal.)
 4. Add carefully scoped real tool adapters behind the existing approval workflow.
    Keep the gateway as their only execution path.
-5. ~~Extend the red-team evaluation with paraphrased attacks.~~ Done: the
-   held-out set (`attack-scenarios/firewall_holdout.yaml`) puts signature recall
-   on unseen phrasings at 45%. Next: a model-based classifier, measured on that set
-   (and on a fresh one, since any tuning against it spends it).
+5. ~~Extend the red-team evaluation with paraphrased attacks, then add a
+   model-based classifier.~~ Done (Phase 12). The learned semantic layer raises
+   recall on a fresh held-out set from 27% to 61%. Next steps:
+   - a neural classifier behind the same interface;
+   - an independent, external held-out set.

@@ -87,7 +87,7 @@ flowchart TB
 | **Guarded RAG** | Paragraph-level chunks are screened at ingestion: injected chunks are quarantined and their source penalized. They are screened again at retrieval, and untrusted or degraded sources are dropped. |
 | **Agents** | A LangGraph workflow (`guard_input → retrieve → plan ⇄ act → respond → guard_output`). The brain is Ollama when available, else a deterministic rule-based planner. |
 | **Red-team lab** | Runs the attack suites on demand against an isolated runtime. Reports detection, false alarms, a confusion matrix, latency and per-scenario outcomes. |
-| **Threat coverage** | 19 controls mapped to OWASP LLM01–LLM10 and ten ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
+| **Threat coverage** | 20 controls mapped to OWASP LLM01–LLM10 and ten ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
 | **Telemetry** | Every decision is counted and every incident recorded as a security event with structured logs. |
 
 Deeper dive: [architecture](docs/architecture.md) · [threat model](docs/threat-model.md).
@@ -152,7 +152,7 @@ red-team run.
 
 | OWASP LLM Top 10 (2025) | Status | Main controls |
 |---|---|---|
-| LLM01 Prompt Injection | ✅ mitigated | Firewall + normalization, spotlighting, RAG quarantine, gateway, trust |
+| LLM01 Prompt Injection | ✅ mitigated | Firewall + normalization + semantic classifier, spotlighting, RAG quarantine, gateway, trust |
 | LLM02 Sensitive Information Disclosure | ✅ mitigated | DLP, domain allow-lists, argument firewall, output guard |
 | LLM03 Supply Chain | ✅ mitigated | Hash-pinned lockfile, SHA-pinned CI actions, pip-audit / npm audit / Trivy image scans, CycloneDX SBOMs + AI-BOM, model provenance pins verified before load |
 | LLM04 Data and Model Poisoning | 🟡 partial | Ingest quarantine, source trust (retrieval data only) |
@@ -189,21 +189,29 @@ The full list, with the test behind each one, is in the
 From [`evaluation/`](evaluation/README.md) and the Red-team lab, against
 [`attack-scenarios/`](attack-scenarios/README.md):
 
-| Metric | Development set (73) | Held-out set (53) |
+| Metric | Development set (83) | Held-out sets v1 + v2 (108) |
 |---|---|---|
-| Firewall precision / recall | **97.6% / 95.3%** (41 of 43 attacks) | **87.5% / 45.2%** (14 of 31 attacks) |
-| False-positive rate | 3.3%: 1 of 30 benign flagged, none blocked | 9.1%: 2 of 22 benign, both blocked |
-| Scan latency p95 | ~0.4 ms (in-process, CPU only) | |
-| End-to-end agent scenarios | **21 / 21 defended** | |
+| Firewall precision / recall | **98.0% / 100%** (50 of 50 attacks) | **91.8% / 70.3%** (45 of 64 attacks) |
+| False-positive rate | 3.0%: 1 of 33 benign flagged, none blocked | 9.1%: 4 of 44 benign (2 blocked, 2 flagged) |
+| Scan latency p95 | ~0.3 ms (in-process, CPU only) | |
+| End-to-end agent scenarios | **22 / 22 defended** | |
 
-The rules were tuned on the development set, so its numbers are optimistic. The
-held-out set ([`firewall_holdout.yaml`](attack-scenarios/firewall_holdout.yaml)) was
-written afterwards and is never used for tuning. On it, the firewall still catches
-every obfuscated payload, delimiter injection and tool-abuse argument (12 / 12), but
-none of the paraphrased role-play, prompt-extraction or indirect instructions
-(0 / 12). Signature detection doesn't generalise to paraphrase, which is why the
-gateway's deny-by-default controls, not the firewall, decide what an agent can do,
-and why a semantic detector is next on the roadmap. The CI gate
+The rules were tuned on the development set and the semantic layer was trained on
+it, so those numbers are optimistic. The held-out sets
+([`firewall_holdout.yaml`](attack-scenarios/firewall_holdout.yaml) and
+[`firewall_holdout_v2.yaml`](attack-scenarios/firewall_holdout_v2.yaml)) are never
+used for tuning or training.
+
+Signature rules catch obfuscation, delimiter tricks and tool abuse, but not
+paraphrase. The semantic layer (Phase 12) closes much of that gap. On v2, written
+after the semantic layer was frozen, recall rises from **27.3% to 60.6%**, at the
+cost of one flagged benign document and none blocked. See
+[evaluation/README.md](evaluation/README.md#semantic-layer-phase-12) for the
+ablation and its caveats.
+
+Roughly four in ten paraphrased attacks still get through. That is why the
+gateway's deny-by-default controls, not the firewall, decide what an agent can do.
+The CI gate
 ([`tests/test_evaluation.py`](backend/tests/test_evaluation.py)) fails if development-set
 recall or precision drops below 90%, false positives exceed 10%, any benign input is
 blocked, or any scenario fails.
@@ -432,8 +440,9 @@ AegisAI/
   pagination, per-principal turn / token / cost budgets (closes LLM10)
 - [x] **Phase 11** — Assurance: human approval workflow, red-team lab, OWASP LLM Top 10 /
   MITRE ATLAS threat coverage, threat model (built ahead of Phase 10)
-- [ ] **Phase 12** — ~~Paraphrased red-team suite~~ (done: the held-out set), then a
-  semantic injection detector
+- [x] **Phase 12** — Paraphrase development set, a learned semantic injection layer
+  (cross-validated, frozen before a fresh held-out set was written; held-out v2 recall
+  27% → 61%)
 - [x] **Phase 13** — Supply chain: CycloneDX SBOMs and an AI-BOM, Trivy image and
   Dockerfile scanning, SHA-pinned CI actions, model provenance pins verified before
   load (closes LLM03) — see [docs/supply-chain.md](docs/supply-chain.md)
