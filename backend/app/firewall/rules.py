@@ -198,10 +198,24 @@ RULES: tuple[Rule, ...] = (
         "DX-001",
         "DATA_EXFILTRATION",
         0.75,
-        r"\b(?:send|upload|post|forward|email|e-mail|exfiltrate|transmit|leak|copy|submit)\b[^.\n]{0,80}?"
-        r"\b(?:to|into)\s+(?:(?:https?|ftp)://\S*|an?\s+external|this\s+(?:url|address|endpoint|server|webhook)|attacker|my\s+(?:server|webhook|email))",
+        r"\b(?:send|upload|post|forward|email|e-mail|mail|dispatch|exfiltrate|transmit|leak|copy|submit)\b[^.\n]{0,80}?"
+        r"\b(?:to|into)\s+(?:(?:https?|ftp)://\S*|an?\s+external|this\s+(?:url|address|endpoint|server|webhook)|attacker|my\s+(?:server|webhook|email|personal))",
         "Instructs sending data to an external destination.",
         indirect_weight=0.9,
+    ),
+    _r(
+        "DX-004",
+        "DATA_EXFILTRATION",
+        0.55,
+        # A possessive/determiner before the object keeps declarative prose such
+        # as "assistants may only send data to company.com" from matching, while
+        # imperatives like "mail the content to …" still do.
+        r"\b(?:mail|e-?mail|send|forward|upload|post|transmit|exfiltrate|leak|dispatch)\s+"
+        r"(?:me\s+|us\s+)?(?:the|all|this|that|these|those|our|every|your)\s+(?:\w+\s+){0,2}?"
+        r"(?:contents?|data|files?|documents?|records?|database|credentials?|secrets?|information|details)\b"
+        r"[^.\n]{0,40}?\bto\b",
+        "Sends the contents / data / files to a destination.",
+        indirect_weight=0.8,
     ),
     _r(
         "DX-002",
@@ -227,6 +241,16 @@ RULES: tuple[Rule, ...] = (
         r"(?:admin\s+|root\s+|database\s+|db\s+)?(?:api[\s_-]?keys?|passwords?|credentials|secrets?|access\s+tokens?|private\s+keys?|jwt\s+secret)\b"
         r"(?!\s+(?:policy|policies|requirements|rotation|reset|manager|guidelines))",
         "Requests credentials or secrets.",
+    ),
+    _r(
+        "CH-002",
+        "CREDENTIAL_HARVESTING",
+        0.8,
+        r"\b(?:change|reset|set|update|modify|replace|rotate)\s+(?:\w+\s+){0,3}?"
+        r"(?:pass(?:word|wd|phrase)?|passcode|pin|credentials?)\s+(?:to|=|:)\b"
+        r"(?!\s+(?:a\s+(?:strong|stronger|secure|unique|complex|new)|something\s+(?:strong|secure|memorable)|at\s+least|be\b))",
+        "Attempts to change/reset a credential to a chosen value (account takeover).",
+        indirect_weight=0.9,
     ),
     # ------------------------------------------------------- safety bypass
     _r(
@@ -281,4 +305,5 @@ SIGNAL_RULES: dict[str, tuple[str, float, str]] = {
     "OB-002": ("OBFUSCATION", 0.4, "Mixed-script words built from look-alike characters."),
     "OB-003": ("OBFUSCATION", 0.2, "Letters spaced apart to evade matching."),
     "OB-004": ("OBFUSCATION", 0.25, "Encoded (base64) payload hiding an injection."),
+    "OB-005": ("OBFUSCATION", 0.3, "Leetspeak / symbol substitution hiding an instruction."),
 }

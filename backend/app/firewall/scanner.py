@@ -74,16 +74,24 @@ class PromptFirewall:
                 )
 
         # 2. Alternate readings (de-leeted, de-spaced). A rule that only fires
-        #    here means the author obfuscated it on purpose. Spans are mapped back
+        #    here means the author obfuscated it on purpose — tracked per kind
+        #    so the right obfuscation signal is scored below. Spans are mapped back
         #    to the canonical text so the obfuscated span can be redacted too.
-        evaded = False
-        for number, variant in enumerate(norm.variants):
+        evaded_leet = False
+        evaded_spacing = False
+        labelled = [("leet", v) for v in norm.leet_variants]
+        if norm.spaced_variant is not None:
+            labelled.append(("spaced", norm.spaced_variant))
+        for number, (kind, variant) in enumerate(labelled):
             for rule in self.rules:
                 if rule.rule_id in matches:
                     continue
                 m = rule.pattern.search(variant)
                 if m:
-                    evaded = True
+                    if kind == "leet":
+                        evaded_leet = True
+                    else:
+                        evaded_spacing = True
                     start, end = norm.variant_span(number, m.start(), m.end())
                     matches[rule.rule_id] = RuleMatch(
                         rule_id=rule.rule_id,
@@ -119,10 +127,14 @@ class PromptFirewall:
             self._add_signal(
                 matches, "OB-002", f"{norm.homoglyph_count} mixed-script word(s)", indirect
             )
-        if evaded and norm.spaced_letter_runs:
+        if evaded_spacing and norm.spaced_letter_runs:
             self._add_signal(matches, "OB-003", "spaced-out letters", indirect)
         if hidden_payload:
             self._add_signal(matches, "OB-004", "base64-encoded instructions", indirect)
+        if evaded_leet:
+            self._add_signal(
+                matches, "OB-005", "leetspeak / symbol-substituted instruction", indirect
+            )
 
         return self._verdict(list(matches.values()), channel)
 

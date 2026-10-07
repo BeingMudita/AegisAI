@@ -7,5 +7,6 @@ mypy>=1.11
 types-PyYAML
 # Known-vulnerability scan of requirements.lock (CI runs it)
 pip-audit>=2.7
+reportlab>=4.0   # sample-data (PDF) generation
 # Embedded PostgreSQL + pgvector for `AEGIS_TEST_POSTGRES=1 pytest`
 pgserver>=0.1.4

@@ -5,11 +5,13 @@ import {
   FlaskConical,
   Gauge,
   LayoutDashboard,
+  GitBranch,
   LogOut,
   Menu,
   Monitor,
   Moon,
   Network,
+  Radar,
   ScrollText,
   ShieldAlert,
   ShieldCheck,
@@ -33,9 +35,11 @@ const Overview = lazy(() => import("./pages/Overview"));
 const Policies = lazy(() => import("./pages/Policies"));
 const Trust = lazy(() => import("./pages/Trust"));
 const Architecture = lazy(() => import("./pages/Architecture"));
+const Sessions = lazy(() => import("./pages/Sessions"));
 const Approvals = lazy(() => import("./pages/Approvals"));
 const RedTeam = lazy(() => import("./pages/RedTeam"));
 const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
+const AttackReplay = lazy(() => import("./pages/AttackReplay"));
 
 interface Route {
   id: string;
@@ -64,6 +68,22 @@ const ROUTES: Route[] = [
     render: () => <Events />,
   },
   { id: "trust", label: "Trust", group: "Monitor", icon: Gauge, staffOnly: true, render: () => <Trust /> },
+  {
+    id: "sessions",
+    label: "Attack reconstruction",
+    group: "Monitor",
+    icon: GitBranch,
+    staffOnly: false,
+    render: () => <Sessions />,
+  },
+  {
+    id: "replay",
+    label: "Attack replay",
+    group: "Monitor",
+    icon: Radar,
+    staffOnly: false,
+    render: () => <AttackReplay />,
+  },
   {
     id: "knowledge",
     label: "Knowledge base",

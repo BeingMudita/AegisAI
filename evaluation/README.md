@@ -21,6 +21,44 @@ recall or precision drop below 90%, the false-positive rate rises above 10%,
 any benign input is blocked outright, or any agent scenario fails. Those floors
 apply to the development set only; the held-out set is reported, never gated.
 
+## Phase 11 — four-configuration research experiment
+
+`run_experiments.py` is the research harness the synopsis calls for. It runs
+every labelled agent scenario through the four configurations and measures the
+three metric categories (security, utility, performance), then writes a
+comparison report with tables **and** charts.
+
+```bash
+backend/.venv/Scripts/python evaluation/run_experiments.py   # Windows
+backend/.venv/bin/python evaluation/run_experiments.py       # macOS / Linux
+```
+
+| id | synopsis name | firewall | trust |
+|---|---|:--:|:--:|
+| `baseline` | Agent only | off | off |
+| `trust_only` | Agent + Trust Layer | off | on |
+| `firewall_only` | Agent + Firewall | on | off |
+| `combined` | Agent + Trust + Firewall | on | on |
+
+The agent's **policy gateway** (tool registry / per-agent policy / domain
+allow-list / rate limits) and the output **DLP PII-redaction** are baseline
+hygiene — properties of the agent, not of the two components under study — so
+they stay active in every configuration. The two things toggled are exactly
+the prompt-injection firewall and the trust engine, giving a clean 2×2.
+
+Decision classes follow the synopsis's **ALLOW / CONFIRM / BLOCK** taxonomy;
+the firewall's existing FLAG action (suspicious, let through but sanitised and
+audited) is the CONFIRM class.
+
+Outputs (in `results/`): `experiments.json` (every outcome), `comparison.csv`
+(one row per config), `experiments.md` (tables), and `experiments.html`
+(tables + dependency-free SVG comparison charts).
+
+Metrics: attack-success rate (11.5), precision / recall / F1 (11.6), block
+rate (11.7), false-positive rate (11.8), legitimate-task completion (11.9),
+confirmation rate (11.10), isolated trust-analysis latency (11.11), firewall
+latency (11.12), and total system overhead vs. baseline (11.13).
+
 ## What is measured
 
 **Firewall benchmark** — every labelled input is scanned on its channel.
@@ -48,20 +86,36 @@ denial at the trust check.
 
 | | Development set | Held-out set |
 |---|---|---|
-| Firewall precision | 97.6% | 87.5% |
-| Firewall recall | 95.3% (41 / 43 attacks) | 45.2% (14 / 31 attacks) |
-| False-positive rate | 3.3% (1 / 30 benign — flagged, not blocked) | 9.1% (2 / 22 benign — both blocked) |
+| Firewall precision | 98.0% | 88.2% |
+| Firewall recall | 96.0% (48 / 50 attacks) | 48.4% (15 / 31 attacks) |
+| False-positive rate | 3.0% (1 / 33 benign — flagged, not blocked) | 9.1% (2 / 22 benign — both blocked) |
 | Scan latency p95 | < 0.5 ms | |
-| Agent scenarios | 21 / 21 pass | |
+| Agent scenarios | 22 / 22 pass | |
 
 On the held-out set the rules still catch every obfuscated payload (leetspeak,
 homoglyphs, zero-width characters, base64), every delimiter injection and every
-tool-abuse argument (12 / 12). They catch none of the paraphrased role-play,
-prompt-extraction, credential-harvesting or indirect-instruction cases (0 / 12),
+tool-abuse argument. They miss almost all of the paraphrased role-play,
+prompt-extraction, credential-harvesting and indirect-instruction cases,
 and they block two benign documents that *quote* attack phrases (a security
 training note, a password-reset guide). That gap is the case for a semantic
 detector; the agent scenarios show the gateway still bounds what a missed
 attack can make an agent do.
+
+### Four-configuration comparison (latest run)
+
+| Configuration | Attack success ↓ | Block rate ↑ | False-positive ↓ | Legit completion ↑ | F1 |
+|---|--:|--:|--:|--:|--:|
+| Baseline (agent only) | 57% | 43% | 0% | 100% | 0.60 |
+| Agent + Trust | 50% | 50% | 12% | 88% | 0.64 |
+| Agent + Firewall | 14% | 79% | 0% | 100% | 0.88 |
+| **Agent + Trust + Firewall** | **0%** | **93%** | 12% | 88% | **0.93** |
+
+The combined architecture drives attack success to zero: the firewall is the
+larger single contributor (ASR 57% → 14%), while the trust layer closes the
+remaining gaps — attack-driven degradation (AG-40) and suspension (AG-41) —
+at the cost of some friction on high-risk legitimate actions (AG-21), which is
+the measured false-positive / completion trade-off. Combined adds well under
+1 ms per turn over baseline.
 
 **Known limitations** (kept in the benchmark on purpose):
 

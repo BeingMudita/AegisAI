@@ -66,8 +66,35 @@ _CONFUSABLE_MAP = {
 _CONFUSABLES = str.maketrans(_CONFUSABLE_MAP)
 _CONFUSABLE_CHARS = frozenset(_CONFUSABLE_MAP)
 
-_LEET = str.maketrans(
-    {"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"}
+# Leetspeak / symbol substitutions. Several glyphs are ambiguous (``|`` and ``1``
+# can each be "i" or "l"), so we build two readings: a primary map and an
+# alternate that swaps the ambiguous pair. The scanner checks both, so
+# "M@|L" → "mail" and "|34k" → "leak" are each reachable.
+_LEET_BASE: dict[str, str] = {
+    "0": "o",
+    "1": "i",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "6": "g",
+    "7": "t",
+    "8": "b",
+    "@": "a",
+    "$": "s",
+    "(": "c",
+    "{": "c",
+    "<": "c",
+    "|": "l",
+    "!": "i",
+    "+": "t",
+    "€": "e",
+    "£": "l",
+}
+# Alternate readings for the ambiguous glyphs.
+_LEET_ALT: dict[str, str] = {**_LEET_BASE, "|": "i", "1": "l", "!": "l"}
+_LEET_MAPS: tuple[dict[int, str], ...] = (
+    str.maketrans(_LEET_BASE),
+    str.maketrans(_LEET_ALT),
 )
 
 # "i g n o r e  a l l" — letters separated by single spaces/dots/dashes.
@@ -91,7 +118,10 @@ class NormalizedText:
     """
 
     text: str
-    variants: list[str] = field(default_factory=list)
+    # De-leeted readings (0–2) and the de-spaced reading, kept apart so the
+    # scanner knows which kind of obfuscation revealed a match.
+    leet_variants: list[str] = field(default_factory=list)
+    spaced_variant: str | None = None
     decoded_payloads: list[str] = field(default_factory=list)
     invisible_count: int = 0
     homoglyph_count: int = 0
@@ -113,6 +143,13 @@ class NormalizedText:
         if end <= start:
             return (self.starts[start], self.starts[start]) if start < len(self.starts) else (0, 0)
         return self.starts[start], self.ends[end - 1]
+
+    @property
+    def variants(self) -> list[str]:
+        """All alternate readings (de-leeted + de-spaced), for callers that
+        don't care which obfuscation produced them."""
+        extra = [self.spaced_variant] if self.spaced_variant is not None else []
+        return [*self.leet_variants, *extra]
 
 
 def _decode_base64(token: str) -> str | None:
@@ -207,15 +244,19 @@ def normalize(text: str) -> NormalizedText:
         canonical_pieces.pop()
     canonical = "".join(ch for ch, _, _ in canonical_pieces)
 
-    variants: list[str] = []
+    # Distinct de-leeted readings (skip ones identical to the canonical text).
+    # ``variant_maps`` follows the order of ``NormalizedText.variants``.
+    leet_variants: list[str] = []
     variant_maps: list[list[int] | None] = []
-    deleeted = canonical.translate(_LEET)  # one character for one
-    if deleeted != canonical:
-        variants.append(deleeted)
-        variant_maps.append(None)
+    for leet_map in _LEET_MAPS:
+        deleeted = canonical.translate(leet_map)  # one character for one
+        if deleeted != canonical and deleeted not in leet_variants:
+            leet_variants.append(deleeted)
+            variant_maps.append(None)
+
+    spaced_variant: str | None = None
     if spaced_runs:
-        squashed, mapping = _squash_spaced(canonical)
-        variants.append(squashed)
+        spaced_variant, mapping = _squash_spaced(canonical)
         variant_maps.append(mapping)
 
     decoded_payloads: list[str] = []
@@ -228,7 +269,8 @@ def normalize(text: str) -> NormalizedText:
 
     return NormalizedText(
         text=canonical,
-        variants=variants,
+        leet_variants=leet_variants,
+        spaced_variant=spaced_variant,
         decoded_payloads=decoded_payloads,
         invisible_count=invisible_count,
         homoglyph_count=homoglyph_count,

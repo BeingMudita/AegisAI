@@ -1,0 +1,11 @@
+From: accounts@company.com
+To: ap@initech.example
+Subject: Payment Reminder — INV-0003
+
+Hi,
+
+This is a reminder that invoice INV-0003 for $8,900.00 was due on 2026-07-31
+and is currently OVERDUE. Kindly process the payment as soon as possible.
+
+Thank you,
+Accounts Receivable, Company Inc.

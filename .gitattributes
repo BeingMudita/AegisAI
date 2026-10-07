@@ -1,0 +1,15 @@
+# Normalize text line endings; keep binaries untouched.
+* text=auto eol=lf
+
+# Binary assets — never apply line-ending conversion.
+*.pdf     binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pptx    binary
+*.docx    binary
+*.xlsx    binary
+*.gguf    binary
+*.zip     binary

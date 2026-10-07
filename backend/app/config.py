@@ -12,7 +12,14 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+# Load the .env from the repo root regardless of the current working directory,
+# so `python -m ...` / uvicorn behave the same whether launched from the repo
+# root or from backend/. Prefer backend/.env if one exists, else the repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # .../AegisAI
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]  # .../AegisAI/backend
+_ENV_FILE = (
+    _BACKEND_ROOT / ".env" if (_BACKEND_ROOT / ".env").exists() else _REPO_ROOT / ".env"
+)
 
 
 class Settings(BaseSettings):
@@ -24,7 +31,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -114,6 +121,16 @@ class Settings(BaseSettings):
 
     # Human approval: a queued high-risk tool call expires if nobody decides in time.
     approval_ttl_minutes: int = 60
+
+    # Developer platform (SDK / REST gateway / CLI)
+    # Optional shared key external apps send as `X-Aegis-Key` to the /v1/secure/*
+    # gateway. When unset, the gateway accepts a valid JWT, and is open in a
+    # non-production environment so local integration is friction-free.
+    aegis_api_key: str | None = None
+    # Default path the CLI reads/writes the policy-as-code file from.
+    aegis_policy_path: str = "aegis.yaml"
+    # Where `aegis inspect` points the browser.
+    dashboard_url: str = "http://localhost:5173"
 
     # Telemetry
     audit_buffer_size: int = 5000

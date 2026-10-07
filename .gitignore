@@ -66,6 +66,12 @@ dist-ssr/
 coverage/
 .eslintcache
 
+# Playwright (E2E) / Vitest output
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/
+
 # ---------------------------------------------------------------------------
 # Databases / data
 # ---------------------------------------------------------------------------
