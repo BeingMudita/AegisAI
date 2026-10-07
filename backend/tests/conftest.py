@@ -47,6 +47,8 @@ import pytest  # noqa: E402
 
 from app.agents.sessions import get_session_store  # noqa: E402
 from app.auth.limiter import clear_login_limits  # noqa: E402
+from app.platform.adaptive import get_adaptive_monitor  # noqa: E402
+from app.platform.threatintel import get_threat_intel  # noqa: E402
 from app.policies.store import clear_policy_cache  # noqa: E402
 from app.quotas.store import get_budget_store  # noqa: E402
 from app.redteam.service import get_redteam_service  # noqa: E402
@@ -69,6 +71,8 @@ def _clear() -> None:
     get_session_store().clear()
     get_redteam_service().store.clear()
     get_budget_store().clear()
+    get_adaptive_monitor().clear()
+    get_threat_intel().clear()
     OUTBOX.clear()
 
 

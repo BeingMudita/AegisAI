@@ -38,3 +38,4 @@ exclude = ['app/rag/(pipeline|retrieval|ingest|llm|extraction)[.]py$']
 
 [tool.ruff.lint.per-file-ignores]
 "app/compliance/catalog.py" = ["E501"]  # threat descriptions are prose data
+"app/platform/scanner.py" = ["E501"]    # finding prose + the HTML report template

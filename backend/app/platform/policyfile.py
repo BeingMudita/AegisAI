@@ -87,6 +87,27 @@ class AegisFile(BaseModel):
             sensitive_data=list(self.data.deny),
         )
 
+    def to_yaml(self) -> str:
+        """Serialize back to ``aegis.yaml`` text (stable section order, omitting empties)."""
+        data: dict = {
+            "agent": {"name": self.agent.name},
+            "permissions": {"tools": list(self.permissions.tools)},
+        }
+        if self.domains.allowed:
+            data["domains"] = {"allowed": list(self.domains.allowed)}
+        if self.data.allow or self.data.deny:
+            section: dict = {}
+            if self.data.allow:
+                section["allow"] = list(self.data.allow)
+            if self.data.deny:
+                section["deny"] = list(self.data.deny)
+            data["data"] = section
+        if self.trust.minimum:
+            data["trust"] = {"minimum": self.trust.minimum}
+        if self.approval.required_for:
+            data["approval"] = {"required_for": list(self.approval.required_for)}
+        return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+
     def tool_overrides(self) -> list[ToolPolicy]:
         """Per-tool settings (approval, trust floor) built on the global registry.
 

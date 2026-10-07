@@ -1,0 +1,71 @@
+name: "AegisAI Security Gate"
+description: "Audit, red-team and gate an AI agent's security before it ships (DevSecOps for agentic AI)."
+author: "AegisAI"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  target:
+    description: "Agent name, aegis.yaml path, or agent source directory to gate."
+    required: false
+    default: "aegis.yaml"
+  threshold:
+    description: "Minimum security score (0–100) required to pass."
+    required: false
+    default: "90"
+  redteam:
+    description: "Run the red-team suite as part of the gate (true/false)."
+    required: false
+    default: "true"
+  aegis-path:
+    description: "Path to the AegisAI backend to install (contains pyproject.toml)."
+    required: false
+    default: "backend"
+  comment:
+    description: "Post the report as a pull-request comment (needs GITHUB_TOKEN)."
+    required: false
+    default: "true"
+
+outputs:
+  passed:
+    description: "true when the gate passed."
+    value: ${{ steps.gate.outputs.passed }}
+  score:
+    description: "The agent's security score out of 100."
+    value: ${{ steps.gate.outputs.score }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install AegisAI
+      shell: bash
+      run: pip install -e "${{ inputs.aegis-path }}"
+
+    - name: Run the AegisAI security gate
+      id: gate
+      shell: bash
+      env:
+        AEGIS_TARGET: ${{ inputs.target }}
+        AEGIS_THRESHOLD: ${{ inputs.threshold }}
+        AEGIS_REDTEAM: ${{ inputs.redteam }}
+        LLM_BACKEND: rule_based
+        EMBEDDING_BACKEND: hashing
+        RAG_PERSIST: "false"
+      run: bash "${{ github.action_path }}/entrypoint.sh"
+
+    - name: Comment on the pull request
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        if [ -f aegis-gate-report.md ] && command -v gh >/dev/null 2>&1; then
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file aegis-gate-report.md || echo "Could not post PR comment (continuing)."
+        fi

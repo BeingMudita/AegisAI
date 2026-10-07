@@ -1,0 +1,22 @@
+# Puts the external finance agent behind AegisAI without touching its code.
+id: finance-agent
+mode: proxy
+
+upstream:
+  # This demo exercises tool authorization, which needs no LLM, so the upstream
+  # is left local (the built-in AegisAI runtime). Point `url` at any
+  # OpenAI-compatible endpoint to guard the agent's chat traffic too.
+  type: openai-compatible
+  url: ""
+
+policy:
+  path: ./aegis.yaml
+
+security:
+  input_firewall: true
+  trust: true
+  tool_gateway: true
+  output_dlp: true
+
+audit:
+  enabled: true

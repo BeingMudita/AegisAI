@@ -129,6 +129,102 @@ curl -s localhost:8000/v1/secure/tool -H 'content-type: application/json' \
 
 ---
 
+## 🔎 Security lifecycle — scan, generate, test, protect
+
+Point AegisAI at an agent and it builds a security profile, scores it out of 100, generates a
+least-privilege policy and red-teams it — the **Discover → Assess → Configure → Test** front half of
+the lifecycle. Full guide: [docs/scanner.md](docs/scanner.md).
+
+```bash
+aegis audit FinanceAgent              # SCAN   → score /100 + 7-category risk report + fixes
+aegis scan-agent ./my-agent           #          (or heuristically scan any agent repo)
+aegis generate-policy FinanceAgent    # GENERATE→ a least-privilege aegis.yaml
+aegis policy test aegis.yaml          # TEST    → run the red-team against the policy
+aegis serve                           # PROTECT → deploy behind the gateway
+aegis proxy --config aegis-agent.yaml # PROTECT → front an existing agent (integration layer)
+```
+
+The scanner reads the real tool registry (risk levels, data categories, approval flags,
+external-destination arguments), scores against a documented deterministic model mapped to the OWASP
+LLM Top 10, and tests in the existing sandbox. It also surfaces in the **Security scanner** dashboard
+page (score, permission graph, generated policy, run-test) and over REST
+(`POST /v1/secure/audit`, `/generate-policy`).
+
+---
+
+## 🔌 Universal runtime integration layer
+
+Take an **existing agent**, don't rewrite its security logic, and route its AI/tool
+interactions through AegisAI. Every framework (OpenAI, LangGraph, MCP, custom) is translated
+into a framework-neutral **Aegis event** and judged by the one security engine — no second copy
+of the firewall, trust, gateway or DLP. Full guide: [docs/proxy.md](docs/proxy.md).
+
+```
+OpenAI ─────┐
+LangGraph ──┤
+MCP ────────┼──▶  Aegis Event Protocol  ──▶  Security Engine  ──▶  ALLOW / APPROVAL / BLOCK
+Custom ─────┘
+```
+
+```bash
+aegis proxy --config aegis-agent.yaml --port 9000
+```
+
+The proxy exposes a drop-in **OpenAI-compatible** endpoint (`POST /v1/chat/completions`) plus
+`/v1/proxy/{tool,output,chat,mcp}`. Point an existing agent's `base_url` at it and nothing else
+changes — input is screened, tool calls are authorized deny-by-default, and secrets/PII are
+redacted on the way out. The [external-agent demo](examples/external-agent/) proves it: the
+*same* agent exfiltrates the customer database on its own, and is blocked the moment its tool
+calls go through the proxy.
+
+---
+
+## 🛠️ AI-DevSecOps — before, during and after deployment
+
+AegisAI covers an agent's whole life with one security core. Full guide:
+[docs/devsecops.md](docs/devsecops.md).
+
+- **Registry** — `connect → scan → protect`. Register an agent (framework, tools, data) and
+  AegisAI runs discover → audit → generate-policy → red-team → configure-proxy, then returns a
+  deployment config (`POST /api/registry/agents` → `/scan` → `/protect`).
+- **Security gate** — audit + red-team + threshold → PASS/FAIL, exit-coded for CI
+  (`aegis gate FinanceAgent --threshold 90`, `POST /api/gate`).
+- **GitHub Action** — the gate as a pull-request check that blocks a weakening change
+  ([`.github/actions/aegis-security`](.github/actions/aegis-security/)).
+- **Runtime adaptive security** — observe behaviour → update trust → adapt enforcement. Agents
+  move `NORMAL → SUSPICIOUS → RESTRICTED → QUARANTINED` as trust degrades, and the proxy
+  tightens tool enforcement at each posture (`GET /api/adaptive/agents/{id}`).
+- **Autopilot** — mines runtime behaviour and proposes policy tightening a human can
+  **Simulate / Apply / Reject** — never a silent production edit (`/api/autopilot/agents/{id}/…`).
+
+```bash
+aegis gate FinanceAgent --threshold 90   # ✓ Deployment permitted  (exit 0 / 2)
+```
+
+---
+
+## 🧠 Collective & structural defence
+
+Two composition-level capabilities. Full guide:
+[docs/threat-intelligence.md](docs/threat-intelligence.md).
+
+- **Threat Intelligence Engine** — when one agent is attacked, AegisAI distils a normalized
+  threat signature and shares it, so another agent is warned about a *variant* of that attack
+  before experiencing it (preemptive detection, even below its own firewall threshold).
+  `aegis threats`, `/api/threat-intel/*`.
+- **Attack-surface analysis** — composes permissions into an attack-surface graph, enumerates
+  dangerous **paths** (`RAG → agent → read_database → send_email → external`), scores the agent's
+  **blast radius** if compromised (0–100), and uses the most dangerous path to **focus the red
+  team**. `aegis blast <agent>`, `/api/attack-surface/*`.
+
+```
+aegis blast weak-agent
+  Blast radius  🔴 71/100     Hardening (least privilege)  Before 71 → After 50 (−21)
+  🔴 [HIGH] external web pages → agent → read_database → send_email → ANY external host
+```
+
+---
+
 ## 🖥️ Product tour
 
 <table>
@@ -412,6 +508,10 @@ AegisAI/
 | Document | For |
 |---|---|
 | [Developer platform](docs/platform.md) | Plug your own agent in: `aegis.yaml`, the Python SDK, the `/v1/secure` REST gateway and the `aegis` CLI |
+| [Security scanner](docs/scanner.md) | Scan an agent, score it /100, generate a least-privilege policy and red-team it (`aegis audit` / `generate-policy` / `policy test`) |
+| [Integration layer](docs/proxy.md) | Route an existing agent through AegisAI: the event protocol, adapters, the proxy, `aegis proxy` and `aegis-agent.yaml` |
+| [AI-DevSecOps](docs/devsecops.md) | Registry onboarding, the security gate, the GitHub Action, runtime adaptive security and Autopilot policy recommendations |
+| [Threat intelligence](docs/threat-intelligence.md) | Cross-agent threat signatures (preemptive detection), attack-surface graph, attack paths, blast radius and risk-guided red teaming |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |

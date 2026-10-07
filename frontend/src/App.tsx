@@ -12,6 +12,7 @@ import {
   Moon,
   Network,
   Radar,
+  ScanLine,
   ScrollText,
   ShieldAlert,
   ShieldCheck,
@@ -40,6 +41,7 @@ const Approvals = lazy(() => import("./pages/Approvals"));
 const RedTeam = lazy(() => import("./pages/RedTeam"));
 const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
 const AttackReplay = lazy(() => import("./pages/AttackReplay"));
+const Scanner = lazy(() => import("./pages/Scanner"));
 
 interface Route {
   id: string;
@@ -107,6 +109,14 @@ const ROUTES: Route[] = [
     icon: UserCheck,
     staffOnly: true,
     render: () => <Approvals />,
+  },
+  {
+    id: "scanner",
+    label: "Security scanner",
+    group: "Assure",
+    icon: ScanLine,
+    staffOnly: false,
+    render: () => <Scanner />,
   },
   {
     id: "redteam",

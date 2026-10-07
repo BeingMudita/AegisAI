@@ -1,0 +1,26 @@
+# The policy AegisAI enforces for the external finance agent.
+# The agent itself has never heard of this file — the proxy applies it.
+agent:
+  name: finance-agent
+
+permissions:
+  tools:
+    - read_database
+    - send_email
+
+domains:
+  # Email may only go to company.com. attacker@gmail.com is therefore refused.
+  allowed:
+    - company.com
+
+data:
+  deny:
+    - customer_records
+    - credentials
+
+trust:
+  minimum: 0.60
+
+approval:
+  required_for:
+    - send_email

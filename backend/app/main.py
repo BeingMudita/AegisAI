@@ -14,6 +14,7 @@ from app import __version__
 from app.api.router import api_router
 from app.config import get_settings
 from app.platform.gateway_api import router as gateway_router
+from app.platform.proxy import router as proxy_router
 from app.quotas.service import BudgetExceeded
 from app.telemetry.logging import configure_logging
 
@@ -70,6 +71,7 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(gateway_router)  # developer platform: /v1/secure/*
+app.include_router(proxy_router)  # universal integration layer: /v1/proxy/*, /v1/chat/completions
 
 
 @app.exception_handler(BudgetExceeded)
