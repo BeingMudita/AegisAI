@@ -1,0 +1,25 @@
+name: AegisAI Security
+
+# DevSecOps for agentic AI: every change to the agent or its policy is audited
+# and red-teamed again, and a weakening change blocks the pull request.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write # so the action can post the security report as a comment
+
+jobs:
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: AegisAI security gate
+        uses: ./.github/actions/aegis-security
+        with:
+          target: FinanceAgent # an agent name, an aegis.yaml, or a source directory
+          threshold: "90"
+          redteam: "true"
+          aegis-path: backend

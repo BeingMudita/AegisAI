@@ -56,6 +56,7 @@ class TrustSignal(str, Enum):
     TOOL_DENIED = "TOOL_DENIED"
     INJECTED_CONTENT = "INJECTED_CONTENT"  # a source served injected content
     TOOL_FAILURE = "TOOL_FAILURE"
+    BEHAVIORAL_ANOMALY = "BEHAVIORAL_ANOMALY"  # runtime behavior deviated from the baseline
 
 
 SIGNAL_DELTA: dict[TrustSignal, float] = {
@@ -66,6 +67,7 @@ SIGNAL_DELTA: dict[TrustSignal, float] = {
     TrustSignal.TOOL_DENIED: -0.03,
     TrustSignal.INJECTED_CONTENT: -0.20,
     TrustSignal.TOOL_FAILURE: -0.02,
+    TrustSignal.BEHAVIORAL_ANOMALY: -0.18,
 }
 
 

@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, Header, Request
 
 from app.platform.adapters import get_adapter
 from app.platform.adapters.openai import OpenAIAdapter
+from app.platform.adaptive import get_adaptive_monitor
 from app.platform.gateway_api import require_gateway_access
 from app.platform.protocol import AegisEvent
 from app.platform.protocol.engine import get_security_engine
@@ -77,6 +78,11 @@ def proxy_tool(
         body.agent, body.tool.name, body.tool.arguments, session_id=sid, **_ctx(body.context)
     )
     decision = get_security_engine().evaluate(event)
+    # Runtime adaptive layer: observe the behaviour and let the agent's posture
+    # tighten enforcement (ALLOW → APPROVAL / BLOCK) as its trust degrades.
+    decision = get_adaptive_monitor().apply(
+        body.agent, body.tool.name, decision, body.tool.arguments
+    )
     get_session_registry().record(sid, decision.decision)
     return decision
 
@@ -150,9 +156,14 @@ def proxy_mcp(
     adapter = get_adapter("mcp")
     sid = _session(agent, body.get("params", {}).get("_session"))
     events = adapter.normalize_tool_call(body, agent=agent, session_id=sid)
-    decisions = [get_security_engine().evaluate(e) for e in events]
-    for d in decisions:
-        get_session_registry().record(sid, d.decision)
+    monitor = get_adaptive_monitor()
+    decisions = []
+    for e in events:
+        decision = get_security_engine().evaluate(e)
+        if e.tool is not None:
+            decision = monitor.apply(agent, e.tool.name, decision, e.tool.arguments)
+        get_session_registry().record(sid, decision.decision)
+        decisions.append(decision)
     return adapter.build_response(body, decisions)
 
 

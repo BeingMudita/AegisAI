@@ -4,6 +4,7 @@
     aegis generate-policy <t>  # GENERATE: least-privilege aegis.yaml
     aegis policy test [path]    # TEST: run the red-team against a policy
     aegis policy validate [p]   #        validate an aegis.yaml
+    aegis gate <target>        # GATE: audit + red-team + threshold → PASS/FAIL (CI)
     aegis scan-agent <dir>     # alias: audit a source directory
     aegis init                 # write a starter aegis.yaml
     aegis scan [path]          # validate a policy file / screen a prompt
@@ -101,6 +102,39 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         print("  (dev mode: no AEGIS_API_KEY set — the gateway is open locally)")
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
     return 0
+
+
+def _cmd_gate(args: argparse.Namespace) -> int:
+    from app.platform import gate, scanner
+
+    try:
+        result = gate.run_gate(args.target, threshold=args.threshold, redteam=not args.no_redteam)
+    except scanner.ScannerError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+    elif args.markdown:
+        print(gate.render_markdown(result))
+    else:
+        mark = {True: "✓", False: "✗"}
+        print("AEGIS SECURITY GATE")
+        print("    " + "-" * 44)
+        print(f"    Agent            {result.agent}")
+        print(
+            f"    Security score   {result.score}/100 ({result.grade})"
+            f"   threshold {result.threshold}"
+        )
+        for fam in result.redteam:
+            print(f"    {fam.family:<24} {fam.passed}/{fam.total} {mark[fam.ok]}")
+        print("    " + "-" * 44)
+        for c in result.checks:
+            print(f"    {mark[c.passed]} {c.name}: {c.detail}")
+        print()
+        print(f"    {'✓ Deployment permitted' if result.passed else '✗ Deployment blocked'}")
+    return 0 if result.passed else 2
 
 
 def _cmd_proxy(args: argparse.Namespace) -> int:
@@ -377,6 +411,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--reload", action="store_true")
     p_serve.set_defaults(func=_cmd_serve)
 
+    p_gate = sub.add_parser(
+        "gate", help="security gate: audit + red-team + threshold → PASS/FAIL (for CI)"
+    )
+    p_gate.add_argument("target", help="agent name | aegis.yaml | source directory")
+    p_gate.add_argument("--threshold", type=int, default=90, help="minimum security score (0–100)")
+    p_gate.add_argument("--no-redteam", action="store_true", help="skip the red-team run")
+    p_gate.add_argument("--json", action="store_true", help="emit the result as JSON")
+    p_gate.add_argument("--markdown", action="store_true", help="emit a Markdown report")
+    p_gate.set_defaults(func=_cmd_gate)
+
     p_proxy = sub.add_parser(
         "proxy", help="route an existing agent through AegisAI (the integration layer)"
     )
@@ -401,6 +445,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The reports use ✓/✗/⚠ marks; make sure a legacy (cp1252) console can print them.
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

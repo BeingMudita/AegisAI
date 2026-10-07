@@ -416,6 +416,8 @@ def assess(profile: AgentProfile) -> list[RiskFinding]:
     allowed = profile.allowed_tool_profiles
     integrated = profile.aegis_integrated
     findings: list[RiskFinding] = []
+    # A wildcard allow-list ("*") is effectively no allow-list at all.
+    domains_locked = bool(profile.allowed_domains) and "*" not in profile.allowed_domains
 
     # 1. Excessive Tool Permission
     crit = [t for t in allowed if t.risk_level == "CRITICAL"]
@@ -454,7 +456,7 @@ def assess(profile: AgentProfile) -> list[RiskFinding]:
     # 3. Sensitive Data Exposure
     sens_tools = [t for t in allowed if t.data_category]
     sens_cats = sorted({t.data_category for t in sens_tools if t.data_category})
-    exfil_unlocked = any(t.external for t in allowed) and not profile.allowed_domains
+    exfil_unlocked = any(t.external for t in allowed) and not domains_locked
     if sens_tools and not profile.sensitive_data:
         findings.append(
             _finding(
@@ -478,11 +480,18 @@ def assess(profile: AgentProfile) -> list[RiskFinding]:
 
     # 4. Unsafe External Destinations
     ext = [t for t in allowed if t.external]
-    if ext and not profile.allowed_domains:
+    wildcard = bool(profile.allowed_domains) and "*" in profile.allowed_domains
+    if ext and not domains_locked:
+        detail = (
+            f"External-capable tool(s) allow ANY destination (domains.allowed is '*'): "
+            f"{', '.join(t.name for t in ext)}."
+            if wildcard
+            else f"External-capable tool(s) have no domain allow-list: {', '.join(t.name for t in ext)}."
+        )
         findings.append(
             _finding(
                 "Unsafe External Destinations", "HIGH", "External destinations",
-                f"External-capable tool(s) have no domain allow-list: {', '.join(t.name for t in ext)}.",
+                detail,
                 "domains:\n  allowed:\n    - " + _INTERNAL_DOMAIN,
             )
         )

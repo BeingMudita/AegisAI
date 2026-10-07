@@ -178,6 +178,30 @@ calls go through the proxy.
 
 ---
 
+## 🛠️ AI-DevSecOps — before, during and after deployment
+
+AegisAI covers an agent's whole life with one security core. Full guide:
+[docs/devsecops.md](docs/devsecops.md).
+
+- **Registry** — `connect → scan → protect`. Register an agent (framework, tools, data) and
+  AegisAI runs discover → audit → generate-policy → red-team → configure-proxy, then returns a
+  deployment config (`POST /api/registry/agents` → `/scan` → `/protect`).
+- **Security gate** — audit + red-team + threshold → PASS/FAIL, exit-coded for CI
+  (`aegis gate FinanceAgent --threshold 90`, `POST /api/gate`).
+- **GitHub Action** — the gate as a pull-request check that blocks a weakening change
+  ([`.github/actions/aegis-security`](.github/actions/aegis-security/)).
+- **Runtime adaptive security** — observe behaviour → update trust → adapt enforcement. Agents
+  move `NORMAL → SUSPICIOUS → RESTRICTED → QUARANTINED` as trust degrades, and the proxy
+  tightens tool enforcement at each posture (`GET /api/adaptive/agents/{id}`).
+- **Autopilot** — mines runtime behaviour and proposes policy tightening a human can
+  **Simulate / Apply / Reject** — never a silent production edit (`/api/autopilot/agents/{id}/…`).
+
+```bash
+aegis gate FinanceAgent --threshold 90   # ✓ Deployment permitted  (exit 0 / 2)
+```
+
+---
+
 ## 🖥️ Product tour
 
 <table>
@@ -447,6 +471,7 @@ AegisAI/
 | [Developer platform](docs/platform.md) | Plug your own agent in: `aegis.yaml`, the Python SDK, the `/v1/secure` REST gateway and the `aegis` CLI |
 | [Security scanner](docs/scanner.md) | Scan an agent, score it /100, generate a least-privilege policy and red-team it (`aegis audit` / `generate-policy` / `policy test`) |
 | [Integration layer](docs/proxy.md) | Route an existing agent through AegisAI: the event protocol, adapters, the proxy, `aegis proxy` and `aegis-agent.yaml` |
+| [AI-DevSecOps](docs/devsecops.md) | Registry onboarding, the security gate, the GitHub Action, runtime adaptive security and Autopilot policy recommendations |
 | [Architecture](docs/architecture.md) | Request lifecycle, gateway, approvals, red-team lab, data stores, cross-worker guarantees |
 | [Threat model](docs/threat-model.md) | Assets, trust boundaries, adversaries, threats, guarantees, residual risk |
 | [Operator guide](docs/operator-guide.md) | A practical review workflow and deployment boundaries |
