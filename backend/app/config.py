@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     trust_threshold: float = 0.6
     firewall_block_threshold: float = 0.8
     firewall_flag_threshold: float = 0.4
+    # Semantic layer (Phase 12): a learned classifier for paraphrased attacks the
+    # rules miss. It can raise ALLOW to FLAG, never to BLOCK.
+    firewall_semantic: bool = True
     policy_config_path: str = "app/policies/default_policies.yaml"
     # Postgres mode: how long a policy read from the database is reused (seconds).
     policy_cache_seconds: float = 5.0

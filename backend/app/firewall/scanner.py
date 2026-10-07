@@ -25,6 +25,7 @@ from app.firewall.schemas import (
     RuleInfo,
     RuleMatch,
 )
+from app.firewall.semantic import SemanticClassifier, get_semantic_classifier
 from app.telemetry.store import get_audit_log
 
 _EXCERPT_LEN = 80
@@ -44,12 +45,14 @@ class PromptFirewall:
         block_threshold: float = 0.8,
         flag_threshold: float = 0.4,
         rules: tuple[Rule, ...] = RULES,
+        semantic: SemanticClassifier | None = None,
     ) -> None:
         if not 0 < flag_threshold <= block_threshold <= 1:
             raise ValueError("Require 0 < flag_threshold <= block_threshold <= 1.")
         self.block_threshold = block_threshold
         self.flag_threshold = flag_threshold
         self.rules = rules
+        self.semantic = semantic
 
     # ------------------------------------------------------------- scanning
     def scan(
@@ -136,7 +139,28 @@ class PromptFirewall:
                 matches, "OB-005", "leetspeak / symbol-substituted instruction", indirect
             )
 
-        return self._verdict(list(matches.values()), channel)
+        verdict = self._verdict(list(matches.values()), channel)
+
+        # 5. Semantic layer — only for text the rules let through. A hit raises
+        #    ALLOW to FLAG (review, sanitise, audit) and never to BLOCK.
+        if self.semantic is not None and verdict.action == FirewallAction.ALLOW:
+            p = self.semantic.probability(norm.text, channel.value, canonical=True)
+            if p >= self.semantic.threshold:
+                matches["SEM-001"] = RuleMatch(
+                    rule_id="SEM-001",
+                    category="SEMANTIC",
+                    weight=self.flag_threshold,
+                    excerpt=f"injection intent p={p:.2f}",
+                )
+                verdict = self._verdict(list(matches.values()), channel)
+                if verdict.action == FirewallAction.BLOCK:
+                    verdict = verdict.model_copy(
+                        update={
+                            "action": FirewallAction.FLAG,
+                            "reason": verdict.reason.replace("BLOCK", "FLAG", 1),
+                        }
+                    )
+        return verdict
 
     @staticmethod
     def _add_signal(
@@ -288,4 +312,5 @@ def get_firewall() -> PromptFirewall:
     return PromptFirewall(
         block_threshold=settings.firewall_block_threshold,
         flag_threshold=settings.firewall_flag_threshold,
+        semantic=get_semantic_classifier(),
     )

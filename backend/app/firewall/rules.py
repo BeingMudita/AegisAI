@@ -306,4 +306,10 @@ SIGNAL_RULES: dict[str, tuple[str, float, str]] = {
     "OB-003": ("OBFUSCATION", 0.2, "Letters spaced apart to evade matching."),
     "OB-004": ("OBFUSCATION", 0.25, "Encoded (base64) payload hiding an injection."),
     "OB-005": ("OBFUSCATION", 0.3, "Leetspeak / symbol substitution hiding an instruction."),
+    # Weight shown for reference: a semantic hit is scored at the flag threshold.
+    "SEM-001": (
+        "SEMANTIC",
+        0.4,
+        "Learned classifier: injection intent without known trigger words.",
+    ),
 }
