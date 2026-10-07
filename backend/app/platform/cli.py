@@ -69,7 +69,7 @@ def _cmd_redteam(args: argparse.Namespace) -> int:
 
     suites = [s.strip() for s in args.suite.split(",") if s.strip()]
     print(f"Running red-team suites {suites} against an isolated sandbox…")
-    run = get_redteam_service().start(suites, started_by="cli", wait=True)  # type: ignore[arg-type]
+    run = get_redteam_service().start(suites, started_by="cli", wait=True)
     if run.status != "completed":
         print(f"✗ Run {run.status}: {run.error or ''}", file=sys.stderr)
         return 1
