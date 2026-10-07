@@ -382,10 +382,10 @@ export default function RedTeam() {
               <p className="mt-4 text-xs leading-relaxed text-ink-2">
                 Signature rules generalise to obfuscation, delimiter tricks and tool abuse, but paraphrased attacks that
                 avoid the vocabulary get through. Those are what the tool gateway, trust scoring and human approval are for.
-                The cases below are the misses and false alarms on this set.
+                Filter the cases below for the misses and false alarms.
               </p>
               <div className="mt-4">
-                <CaseTable cases={[...ho.misses, ...ho.false_positives]} />
+                <CaseTable cases={ho.results} />
               </div>
             </Card>
           )}
