@@ -9,12 +9,13 @@ rows they describe, and some events (API scans, ingestion) have no session at al
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -176,6 +177,21 @@ class RateLimitHit(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(255))
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class UsageBudget(Base):
+    """One principal's consumption on one UTC day — the per-principal budget counters."""
+
+    __tablename__ = "usage_budgets"
+
+    principal: Mapped[str] = mapped_column(String(128), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    turns: Mapped[int] = mapped_column(Integer)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger)
+    completion_tokens: Mapped[int] = mapped_column(BigInteger)
+    tokens: Mapped[int] = mapped_column(BigInteger)
+    cost_usd: Mapped[float] = mapped_column(Float)
+    exhausted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RedTeamRunRow(Base):

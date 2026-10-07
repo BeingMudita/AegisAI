@@ -54,12 +54,53 @@ class Defaults(BaseModel):
     default_action: str = "deny"
 
 
+class BudgetLimits(BaseModel):
+    """Daily limits for one principal (0 = unlimited). Reset at 00:00 UTC."""
+
+    daily_turns: int = Field(default=500, ge=0)
+    daily_tokens: int = Field(default=200_000, ge=0)
+    daily_cost_usd: float = Field(default=0.0, ge=0)
+
+
+class BudgetLimitsOverride(BaseModel):
+    daily_turns: int | None = Field(default=None, ge=0)
+    daily_tokens: int | None = Field(default=None, ge=0)
+    daily_cost_usd: float | None = Field(default=None, ge=0)
+
+
+class BudgetPricing(BaseModel):
+    """USD per 1,000 tokens, used to turn token counts into cost."""
+
+    prompt_per_1k: float = Field(default=0.0, ge=0)
+    completion_per_1k: float = Field(default=0.0, ge=0)
+
+
+class BudgetPolicy(BudgetLimits):
+    """Per-principal consumption budgets (OWASP LLM10)."""
+
+    max_output_tokens: int = Field(default=1024, ge=1)  # per LLM call
+    pricing: BudgetPricing = Field(default_factory=BudgetPricing)
+    roles: dict[str, BudgetLimitsOverride] = Field(default_factory=dict)
+    principals: dict[str, BudgetLimitsOverride] = Field(default_factory=dict)
+
+    def limits_for(self, principal: str, role: str | None) -> BudgetLimits:
+        """The defaults, then the role's overrides, then the principal's."""
+        values = BudgetLimits.model_validate(
+            self.model_dump(include=set(BudgetLimits.model_fields))
+        )
+        for override in (self.roles.get(role or ""), self.principals.get(principal)):
+            if override is not None:
+                values = values.model_copy(update=override.model_dump(exclude_none=True))
+        return values
+
+
 class GlobalPolicyConfig(BaseModel):
     version: int = 1
     defaults: Defaults = Field(default_factory=Defaults)
     tools: list[ToolPolicy] = Field(default_factory=list)
     rag: RagPolicy = Field(default_factory=RagPolicy)
     audit: AuditPolicy = Field(default_factory=AuditPolicy)
+    budgets: BudgetPolicy = Field(default_factory=BudgetPolicy)
 
     def tool(self, name: str) -> ToolPolicy | None:
         return next((t for t in self.tools if t.name == name), None)

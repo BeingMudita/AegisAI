@@ -10,7 +10,7 @@ store may block on the database.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.agents.runtime import get_runtime
 from app.agents.schemas import (
@@ -21,10 +21,12 @@ from app.agents.schemas import (
     RunProgress,
 )
 from app.agents.sessions import get_session_store
+from app.api.pagination import decode_cursor, encode_cursor
 from app.auth.dependencies import get_current_user
 from app.auth.roles import STAFF_ROLES
 from app.auth.schemas import User
 from app.policies.store import get_policy
+from app.quotas.service import get_quota_service
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -38,13 +40,19 @@ def _owned_session(session_id: str, user: User, *, with_turns: bool = True) -> A
 
 
 @router.get("")
-def list_sessions(user: User = Depends(get_current_user)) -> dict:
-    """List sessions visible to the caller, newest first."""
+def list_sessions(
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None, description="next_cursor from the previous page"),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """List sessions visible to the caller, newest first, a page at a time."""
     owner = None if user.role in STAFF_ROLES else user.username
-    sessions = get_session_store().list(owner)
+    sessions = get_session_store().list(owner, limit=limit + 1, before=decode_cursor(cursor))
+    page, more = sessions[:limit], len(sessions) > limit
     return {
-        "sessions": [s.model_dump(mode="json") for s in sessions],
+        "sessions": [s.model_dump(mode="json") for s in page],
         "requested_by": user.username,
+        "next_cursor": encode_cursor(page[-1].created_at, page[-1].id) if more else None,
     }
 
 
@@ -82,6 +90,8 @@ def send_message(
     """
     session = _owned_session(session_id, user)
     store = get_session_store()
+    # Refuse before the request ID is spent, so the caller can retry it tomorrow.
+    get_quota_service().check(user.username)
     try:
         store.begin_turn(session.id, str(body.request_id))
     except ValueError as exc:

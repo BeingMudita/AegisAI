@@ -14,9 +14,10 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Row, delete, func, select
+from sqlalchemy import Row, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 
 from app.database.enums import SecurityEventType, SecuritySeverity
@@ -119,8 +120,16 @@ class PostgresAuditLog(AuditLog):
         agent: str | None = None,
         session_id: str | None = None,
         limit: int = 100,
+        before: tuple[datetime, str] | None = None,
     ) -> list[SecurityEventRecord]:
         query = select(SecurityEvent)
+        if before is not None:
+            stamp, event_id = before
+            try:
+                key = uuid.UUID(event_id)
+            except ValueError:
+                return []
+            query = query.where(tuple_(SecurityEvent.created_at, SecurityEvent.id) < (stamp, key))
         if event_type is not None:
             query = query.where(SecurityEvent.event_type == event_type)
         if severity is not None:
@@ -129,7 +138,9 @@ class PostgresAuditLog(AuditLog):
             query = query.where(func.lower(SecurityEvent.actor) == agent.lower())
         if session_id is not None:
             query = query.where(SecurityEvent.session_id == session_id)
-        query = query.order_by(SecurityEvent.created_at.desc()).limit(limit)
+        query = query.order_by(SecurityEvent.created_at.desc(), SecurityEvent.id.desc()).limit(
+            limit
+        )
         with transaction() as db:
             return [_to_record(row) for row in db.scalars(query)]
 
@@ -156,6 +167,13 @@ class PostgresAuditLog(AuditLog):
             by_agent=by_agent,
             decisions=decisions,
         )
+
+    def purge_before(self, cutoff: datetime) -> int:
+        """Retention: delete events recorded before ``cutoff`` — the only way events
+        leave the durable log."""
+        with transaction() as db:
+            result = db.execute(delete(SecurityEvent).where(SecurityEvent.created_at < cutoff))
+            return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     def clear(self) -> None:
         raise AuditClearForbidden(

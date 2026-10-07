@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # A turn's session lock expires after this, so a crashed worker can't hold a
     # session forever.
     session_lease_seconds: int = 300
+    # A session with no turn for this long expires and refuses further messages.
+    session_idle_minutes: int = 720  # 0 = never
+
+    # Retention (0 = keep forever). A sweeper deletes what is older, once every
+    # RETENTION_INTERVAL_MINUTES, on one worker at a time.
+    audit_retention_days: int = 90  # security events
+    session_retention_days: int = 30  # ended sessions, with their turns
+    usage_retention_days: int = 90  # daily budget counters
+    retention_interval_minutes: int = 60  # 0 = no background sweeper
 
     # Security
     jwt_secret: str = Field(

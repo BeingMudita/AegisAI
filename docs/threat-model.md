@@ -111,12 +111,12 @@ provider's infrastructure.
 | Unsafe output rendered by the dashboard | A2, A3 | LLM05 | Answers rendered as React text, never HTML; CSP from nginx | Mitigated |
 | Knowledge-base poisoning | A2 | LLM04, LLM08 | Admin-only ingest; quarantine; per-source trust and penalties; embedding-model consistency | Partial: training data out of scope |
 | Misinformation from trusted-looking sources | A2 | LLM09 | Retrieval limited to trusted sources; answers cite sources | Partial: no fact verification |
-| Resource exhaustion | A4, A1 | LLM10 · AML.T0029 | Login throttle per address and per account; per-tool rate limits; step, upload and turn-time limits | Partial: no per-principal budgets |
+| Resource exhaustion | A4, A1 | LLM10 · AML.T0029 | Per-principal daily turn / token / cost budgets; LLM output caps; login throttle per address and per account; per-tool rate limits; step, upload and turn-time limits | Mitigated per principal; no global capacity limit |
 | Approval abuse (double execution, stale approval) | A3, A5 | LLM06 | Atomic claim; re-check of every gate at decision time; expiry; reviewer and note recorded | Mitigated |
 | Evidence tampering | A5 | — | Postgres mode: audit log not erasable through the API; exports are snapshots | Partial: no signed archive |
 | Replay and concurrent turns | A1 | — | Request-ID replay rejection; one turn per session (cross-worker in Postgres mode) | Mitigated |
 | Insecure deployment defaults | — | — | Production refuses to start with dev JWT secret or seed passwords | Mitigated |
-| Supply chain (models, packages) | — | LLM03 | Hash-pinned `requirements.lock`; pip-audit and npm audit in CI; Dependabot; pinned container images | Partial: no SBOM, models not verified |
+| Supply chain (models, packages) | — | LLM03 · AML.T0010 | Hash-pinned `requirements.lock`; SHA-pinned CI actions; pip-audit, npm audit and Trivy image scans; CycloneDX SBOMs and AI-BOM; model provenance pins verified before load | Mitigated; publisher signatures not verified |
 
 ## 7. Security guarantees
 
@@ -158,10 +158,11 @@ Stated plainly, as on the Threat coverage page:
   permissions arrive with SSO and tenancy.
 - **Simulated tools.** Real adapters need scoped credentials, timeouts and their own
   output validation before they replace the sandbox.
-- **No retention or budgets yet.** The audit log and sessions grow without bound, and
-  there are no per-principal token or cost limits (Phase 10).
-- **Supply chain.** Packages are pinned and scanned, but there is no SBOM and no
-  model provenance or signature checks.
+- **Budgets are per principal.** They bound each caller, not the system: many accounts
+  can add up, so production still needs an edge rate limiter and a capacity limit.
+- **Supply chain.** Models are pinned and verified against reviewed hashes, but
+  publisher signatures (e.g. Sigstore) are not checked; see
+  [supply-chain.md](supply-chain.md).
 
 ## 9. Keeping this current
 

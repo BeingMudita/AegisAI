@@ -75,3 +75,21 @@ rag:
 audit:
   log_all_decisions: true
   log_blocked_only: false
+
+# Per-principal consumption budgets (OWASP LLM10 — unbounded consumption).
+# Counted per user or API caller and reset at 00:00 UTC; 0 = unlimited. A turn
+# is refused (HTTP 429) once any limit is used up. Tokens are what the LLM
+# reports; with the rule-based planner they are estimated from the text.
+budgets:
+  daily_turns: 500
+  daily_tokens: 200000
+  daily_cost_usd: 0              # no cost cap while pricing is zero (local Ollama)
+  max_output_tokens: 1024        # cap on what one LLM call may generate
+  pricing:                       # USD per 1,000 tokens, for hosted models
+    prompt_per_1k: 0.0
+    completion_per_1k: 0.0
+  roles:                         # overrides by role
+    ADMIN:
+      daily_turns: 2000
+      daily_tokens: 1000000
+  principals: {}                 # overrides by principal, e.g.  api-key: {daily_tokens: 50000}

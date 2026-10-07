@@ -29,6 +29,8 @@ import structlog
 
 from app.agents.schemas import AgentAction, TurnContext
 from app.config import get_settings
+from app.policies.config import get_global_config
+from app.quotas.usage import record_llm_usage
 from app.supply_chain.provenance import check_ollama
 from app.tools.schemas import ToolCallResult
 
@@ -225,7 +227,11 @@ class OllamaClient:
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0},
+            # num_predict caps what one call may generate (budgets.max_output_tokens).
+            "options": {
+                "temperature": 0,
+                "num_predict": get_global_config().budgets.max_output_tokens,
+            },
         }
         if json_mode:
             payload["format"] = "json"
@@ -234,9 +240,12 @@ class OllamaClient:
                 f"{self.base_url}/api/chat", json=payload, timeout=timeout or self.timeout
             )
             resp.raise_for_status()
-            content = resp.json()["message"]["content"]
+            data = resp.json()
+            content = data["message"]["content"]
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise OllamaError(f"{type(exc).__name__}: {exc}") from exc
+        # Charged to the current turn's budget even if the reply proves unusable.
+        record_llm_usage(data.get("prompt_eval_count") or 0, data.get("eval_count") or 0)
         if not isinstance(content, str):
             raise OllamaError("The reply carried no text content.")
         return content

@@ -246,6 +246,18 @@ export interface TraceEntry {
   data: Record<string, unknown>;
 }
 
+export type SessionStatus = "ACTIVE" | "CLOSED" | "TERMINATED" | "EXPIRED";
+
+/** Tokens (and cost) one turn consumed; estimated when no LLM reported counts. */
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  llm_calls: number;
+  estimated: boolean;
+  cost_usd: number;
+}
+
 export interface AgentTurn {
   id: string;
   session_id: string;
@@ -259,6 +271,7 @@ export interface AgentTurn {
   context: RetrievedChunk[];
   dropped: DroppedChunk[];
   redactions: Record<string, number>;
+  usage?: TokenUsage | null;
   duration_ms: number;
   created_at: string;
 }
@@ -276,7 +289,7 @@ export interface SessionSummary {
   id: string;
   agent: string;
   owner: string;
-  status: "ACTIVE" | "CLOSED" | "TERMINATED";
+  status: SessionStatus;
   created_at: string;
   turns: number;
   blocked_turns: number;
@@ -286,7 +299,7 @@ export interface SessionRecord {
   id: string;
   agent: string;
   owner: string;
-  status: "ACTIVE" | "CLOSED" | "TERMINATED";
+  status: SessionStatus;
   created_at: string;
   turns: AgentTurn[];
 }

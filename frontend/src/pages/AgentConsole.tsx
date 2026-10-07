@@ -14,6 +14,7 @@ import {
   PageHeader,
   RichText,
   actionTone,
+  formatTokens,
   inputClass,
   trustTone,
 } from "../components/ui";
@@ -99,6 +100,7 @@ function Turn({ turn }: { turn: AgentTurn }) {
             {!turn.blocked && stopped && <Badge tone="warning">partly blocked</Badge>}
             <span>
               {turn.brain} · {Math.round(turn.duration_ms)} ms
+              {turn.usage && ` · ${formatTokens(turn.usage)}`}
             </span>
           </div>
           <RichText text={turn.answer} />

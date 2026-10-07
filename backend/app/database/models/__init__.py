@@ -27,6 +27,7 @@ from app.database.models.security import (
     ToolRequest,
     TrustAssessment,
     TrustScoreRow,
+    UsageBudget,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "ToolDefinition",
     "ToolRequest",
     "SecurityEvent",
+    "UsageBudget",
 ]

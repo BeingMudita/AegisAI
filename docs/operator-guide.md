@@ -61,8 +61,37 @@ inside its own region and the execution monitor is a disclosure above the chat.
   are process-local and lost on restart. With `STORAGE_BACKEND=postgres` all of them
   are durable and shared, so several workers or replicas can run behind a load
   balancer: session locks, replay rejection, rate limits and the login throttle
-  hold across workers. Session histories and the audit log are not yet pruned
-  (retention arrives in Phase 10).
+  hold across workers.
+- **Retention.** A sweeper runs every `RETENTION_INTERVAL_MINUTES` (60). On
+  Postgres an advisory lock lets only one worker sweep at a time. Each pass:
+  - expires sessions idle for longer than `SESSION_IDLE_MINUTES` (720);
+  - deletes sessions that ended more than `SESSION_RETENTION_DAYS` (30) ago,
+    with their turns;
+  - deletes security events older than `AUDIT_RETENTION_DAYS` (90);
+  - deletes budget counters older than `USAGE_RETENTION_DAYS` (90).
+
+  Retention is the only way events leave the durable audit log. Set a value to
+  `0` to keep that data forever. `aegis retention` runs one pass by hand. An
+  expired session refuses new messages; the caller starts a new session.
+- **Budgets.** Every user and API caller has daily limits on turns, tokens and
+  cost. The limits reset at 00:00 UTC and are set under `budgets:` in
+  `default_policies.yaml`, with per-role and per-principal overrides.
+  - Each turn is reserved before it runs and charged afterwards with the tokens
+    the LLM reported. For the rule-based planner, tokens are estimated from the
+    text.
+  - Each LLM call may generate at most `max_output_tokens`.
+  - A used-up budget returns HTTP 429 with `Retry-After`. The first refusal of
+    the day raises an `ANOMALY` event.
+  - `GET /api/usage/me` shows a caller's own budget. Staff can see everyone's
+    with `GET /api/usage`.
+  - Costs count only when `pricing` is set, which is meant for hosted models.
+    Local Ollama is free, so the cost cap stays off.
+  - Callers of the `/v1/secure` gateway that use the shared API key share one
+    budget, named `api-key`.
+- **Pagination.** `GET /api/sessions` and `GET /api/security-events` return a
+  page of results and a `next_cursor`. Pass `next_cursor` back as `cursor` to
+  get the next page. Cursors are keyset-based, so pages don't shift as new
+  items arrive.
 - The login limiter permits 10 attempts per client address per rolling minute,
   including successful attempts, and 20 *failed* attempts per account per 15
   minutes (so a guessing run spread over many addresses still stops; the account
@@ -96,8 +125,8 @@ inside its own region and the execution monitor is a disclosure above the chat.
 
 1. ~~Migrate operational stores to PostgreSQL; use transactions, shared request IDs,
    and distributed execution locks before adding workers or replicas.~~ Done (Phase 9).
-2. Add durable, access-controlled audit retention, session expiry, quotas, and
-   pagination for large deployments.
+2. ~~Add durable, access-controlled audit retention, session expiry, quotas, and
+   pagination for large deployments.~~ Done (Phase 10).
 3. Integrate organization identity (SSO/OIDC), tenant isolation, and per-principal
    abuse controls. (Trust is already scoped per principal.)
 4. Add carefully scoped real tool adapters behind the existing approval workflow.

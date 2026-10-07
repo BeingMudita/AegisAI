@@ -32,6 +32,8 @@ from app.firewall.schemas import ContentChannel, FirewallAction
 from app.policies.config import get_global_config
 from app.policies.engine import PolicyEngine
 from app.policies.store import get_policy
+from app.quotas.service import QuotaService, get_quota_service
+from app.quotas.usage import metering
 from app.rag.knowledge_base import KnowledgeBase, get_knowledge_base
 from app.rag.schemas import DroppedChunk, RetrievedChunk
 from app.telemetry.store import get_audit_log
@@ -79,8 +81,10 @@ class AgentRuntime:
         knowledge_base: KnowledgeBase,
         max_steps: int = 3,
         turn_timeout: float | None = None,
+        quotas: QuotaService | None = None,
     ) -> None:
         self.brain = brain
+        self.quotas = quotas  # per-principal budgets; None = unmetered (evaluation, red team)
         self.firewall = firewall
         self.trust = trust
         self.gateway = gateway
@@ -414,26 +418,35 @@ class AgentRuntime:
         principal: str | None = None,
     ) -> AgentTurn:
         """Run one guarded turn. ``principal`` is who is driving the agent: trust
-        signals from the turn are charged to the agent's score with them."""
+        signals from the turn are charged to the agent's score with them, and the
+        turn to their daily budget (raises ``BudgetExceeded`` when it is used up)."""
         started = time.perf_counter()
+        quotas = self.quotas if principal else None
+        if quotas is not None and principal:
+            quotas.start_turn(principal, agent=agent)
         deadline = time.monotonic() + self.turn_timeout if self.turn_timeout else None
-        final: AgentState = self.graph.invoke(
-            {
-                "agent": agent,
-                "principal": principal,
-                "deadline": deadline,
-                "session_id": session_id,
-                "message": message,
-                "history": history or [],
-                "progress": progress,
-            },
-            config={"recursion_limit": 6 + 2 * self.max_steps},
-        )
+        with metering() as meter:
+            final: AgentState = self.graph.invoke(
+                {
+                    "agent": agent,
+                    "principal": principal,
+                    "deadline": deadline,
+                    "session_id": session_id,
+                    "message": message,
+                    "history": history or [],
+                    "progress": progress,
+                },
+                config={"recursion_limit": 6 + 2 * self.max_steps},
+            )
+        answer = final.get("answer", "")
+        usage = meter.usage(fallback_text=message + answer)
+        if quotas is not None and principal:
+            usage = quotas.finish_turn(principal, usage)
         return AgentTurn(
             session_id=session_id,
             agent=agent,
             message=message,
-            answer=final.get("answer", ""),
+            answer=answer,
             blocked=bool(final.get("blocked")),
             brain=self.brain.name,
             trace=final.get("trace", []),
@@ -441,6 +454,7 @@ class AgentRuntime:
             context=final.get("context", []),
             dropped=final.get("dropped", []),
             redactions=final.get("redactions", {}),
+            usage=usage,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
 
@@ -456,4 +470,5 @@ def get_runtime() -> AgentRuntime:
         knowledge_base=get_knowledge_base(),
         max_steps=get_settings().agent_max_steps,
         turn_timeout=get_settings().agent_turn_timeout,
+        quotas=get_quota_service(),
     )

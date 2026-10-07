@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.database.enums import SessionStatus
+from app.quotas.usage import TokenUsage
 from app.rag.schemas import DroppedChunk, RetrievedChunk
 from app.tools.schemas import ToolCallResult, ToolInfo
 
@@ -62,6 +63,7 @@ class AgentTurn(BaseModel):
     context: list[RetrievedChunk] = Field(default_factory=list)
     dropped: list[DroppedChunk] = Field(default_factory=list)
     redactions: dict[str, int] = Field(default_factory=dict)
+    usage: TokenUsage | None = None  # tokens (and cost) the turn consumed
     duration_ms: float = 0.0
     created_at: datetime = Field(default_factory=_now)
 

@@ -14,6 +14,7 @@ from collections import Counter, deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
@@ -109,12 +110,16 @@ class AuditLog:
         agent: str | None = None,
         session_id: str | None = None,
         limit: int = 100,
+        before: tuple[datetime, str] | None = None,
     ) -> list[SecurityEventRecord]:
-        """Return matching events, newest first."""
+        """Return matching events, newest first (only those older than ``before``)."""
         with self._lock:
             events = list(self._events)
+        events.sort(key=lambda e: (e.created_at, e.id))
         out: list[SecurityEventRecord] = []
         for event in reversed(events):
+            if before is not None and (event.created_at, event.id) >= before:
+                continue
             if event_type is not None and event.event_type != event_type:
                 continue
             if severity is not None and event.severity != severity:
@@ -146,6 +151,15 @@ class AuditLog:
 
     def flush(self) -> None:
         """Write buffered decision counts to durable storage (nothing to do in memory)."""
+
+    def purge_before(self, cutoff: datetime) -> int:
+        """Retention: delete events recorded before ``cutoff``; returns how many."""
+        with self._lock:
+            kept = [e for e in self._events if e.created_at >= cutoff]
+            removed = len(self._events) - len(kept)
+            self._events.clear()
+            self._events.extend(kept)
+        return removed
 
     def clear(self) -> None:
         """Drop all events and counters (tests / admin reset)."""

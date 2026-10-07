@@ -7,6 +7,7 @@
     aegis inspect              # open the operator dashboard
     aegis verify-models        # check the configured models against their pins
     aegis aibom [-o file]      # the pinned models as a CycloneDX AI-BOM
+    aegis retention            # expire idle sessions, delete data past retention
 
 Stdlib-only (argparse) so it adds no dependency.
 """
@@ -158,6 +159,20 @@ def _cmd_aibom(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_retention(args: argparse.Namespace) -> int:
+    from app.retention import run_retention
+
+    report = run_retention()
+    if report.skipped:
+        print("Another worker is running retention; nothing done.")
+        return 0
+    print(f"Expired idle sessions : {report.expired_sessions}")
+    print(f"Deleted ended sessions: {report.purged_sessions}")
+    print(f"Deleted audit events  : {report.purged_events}")
+    print(f"Deleted budget rows   : {report.purged_usage_rows}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     settings = get_settings()
     parser = argparse.ArgumentParser(
@@ -196,6 +211,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_aibom = sub.add_parser("aibom", help="print the pinned models as a CycloneDX AI-BOM")
     p_aibom.add_argument("-o", "--output", default=None, help="output file (default: stdout)")
     p_aibom.set_defaults(func=_cmd_aibom)
+
+    p_ret = sub.add_parser("retention", help="expire idle sessions and delete expired data")
+    p_ret.set_defaults(func=_cmd_retention)
 
     return parser
 

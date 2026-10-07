@@ -87,7 +87,7 @@ flowchart TB
 | **Guarded RAG** | Paragraph-level chunks are screened at ingestion: injected chunks are quarantined and their source penalized. They are screened again at retrieval, and untrusted or degraded sources are dropped. |
 | **Agents** | A LangGraph workflow (`guard_input → retrieve → plan ⇄ act → respond → guard_output`). The brain is Ollama when available, else a deterministic rule-based planner. |
 | **Red-team lab** | Runs the attack suites on demand against an isolated runtime. Reports detection, false alarms, a confusion matrix, latency and per-scenario outcomes. |
-| **Threat coverage** | 18 controls mapped to OWASP LLM01–LLM10 and ten ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
+| **Threat coverage** | 19 controls mapped to OWASP LLM01–LLM10 and ten ATLAS techniques, each with evidence checked against the latest run and a residual-risk statement. |
 | **Telemetry** | Every decision is counted and every incident recorded as a security event with structured logs. |
 
 Deeper dive: [architecture](docs/architecture.md) · [threat model](docs/threat-model.md).
@@ -161,7 +161,7 @@ red-team run.
 | LLM07 System Prompt Leakage | ✅ mitigated | Firewall rules, no secrets in prompts |
 | LLM08 Vector and Embedding Weaknesses | 🟡 partial | Admin-only ingest, quarantine, embedding-model consistency |
 | LLM09 Misinformation | 🟡 partial | Trust-filtered, cited sources; no fact verification |
-| LLM10 Unbounded Consumption | 🟡 partial | Rate and step limits; per-principal budgets planned |
+| LLM10 Unbounded Consumption | ✅ mitigated | Per-principal daily turn / token / cost budgets, LLM output caps, rate and step limits |
 
 MITRE ATLAS: AML.T0051.000/.001 (direct and indirect injection), T0054 (jailbreak),
 T0056 (meta-prompt extraction), T0057 (data leakage), T0053 (plugin compromise), T0070
@@ -428,8 +428,8 @@ AegisAI/
 - [x] **Phase 8** — Deployment (Docker, Render, Vercel, CI)
 - [x] **Phase 9** — Durable PostgreSQL + pgvector storage: Alembic migrations, transactional
   stores, cross-worker session locks with leases, shared replay rejection and rate limits
-- [ ] **Phase 10** — Retention and quotas: audit retention, session expiry, pagination,
-  per-principal token and cost budgets (closes LLM10)
+- [x] **Phase 10** — Retention and quotas: audit retention, session expiry, keyset
+  pagination, per-principal turn / token / cost budgets (closes LLM10)
 - [x] **Phase 11** — Assurance: human approval workflow, red-team lab, OWASP LLM Top 10 /
   MITRE ATLAS threat coverage, threat model (built ahead of Phase 10)
 - [ ] **Phase 12** — ~~Paraphrased red-team suite~~ (done: the held-out set), then a

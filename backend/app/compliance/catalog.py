@@ -85,6 +85,12 @@ CONTROLS: list[Control] = [
         code=["backend/app/persistence/ratelimit.py", "backend/app/auth/limiter.py"],
     ),
     Control(
+        id="BUDGETS",
+        name="Per-principal budgets",
+        description="Every user and API caller has daily turn, token and cost budgets (policy-as-code, with role and principal overrides), reserved atomically before a turn and charged with the tokens the LLM reports; each LLM call's output is capped. A used-up budget is a 429 until it resets, and the first refusal of the day is an ANOMALY event.",
+        code=["backend/app/quotas/service.py", "backend/app/policies/default_policies.yaml"],
+    ),
+    Control(
         id="DLP",
         name="Data-loss prevention",
         description="Secrets are always redacted; PII is redacted when the agent's policy marks the data as sensitive. Applies to tool output, answers, and the text an email or upload sends out.",
@@ -119,7 +125,7 @@ CONTROLS: list[Control] = [
     Control(
         id="AUDIT",
         name="Durable audit log",
-        description="Every decision is counted and every incident recorded; the Postgres log cannot be erased through the API.",
+        description="Every decision is counted and every incident recorded; the Postgres log cannot be erased through the API, only aged out by the retention policy.",
         page="events",
         code=["backend/app/telemetry/store.py", "backend/app/persistence/audit.py"],
     ),
@@ -284,13 +290,14 @@ OWASP_LLM_2025: list[ThreatDef] = [
         id="LLM10",
         name="Unbounded Consumption",
         description="Excessive or uncontrolled resource use leading to denial of service or cost blow-ups.",
-        status="partial",
-        controls=["LIMITS", "ACCESS"],
+        status="mitigated",
+        controls=["BUDGETS", "LIMITS", "ACCESS"],
         evidence=[
+            "test:backend/tests/test_quotas_retention.py",
             "test:backend/tests/test_tool_gateway.py",
             "test:backend/tests/test_auth_limits.py",
         ],
-        residual="No per-principal token or cost budgets yet (planned with quotas in Phase 10).",
+        residual="Budgets are per principal, so many accounts can still add up; there is no global capacity limit. Token counts are estimates when no LLM reports them.",
     ),
 ]
 
@@ -386,12 +393,13 @@ MITRE_ATLAS: list[ThreatDef] = [
         name="Denial of ML Service",
         description="Exhausting the system's resources to degrade or deny service.",
         status="partial",
-        controls=["LIMITS"],
+        controls=["BUDGETS", "LIMITS"],
         evidence=[
+            "test:backend/tests/test_quotas_retention.py",
             "test:backend/tests/test_tool_gateway.py",
             "test:backend/tests/test_auth_limits.py",
         ],
-        residual="No per-principal compute budgets; production needs edge rate limiting.",
+        residual="Per-principal budgets bound each caller, not the system: production still needs edge rate limiting and a global capacity limit.",
     ),
 ]
 

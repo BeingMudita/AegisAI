@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ComponentType, ReactNode } from "react";
+import type { TokenUsage } from "../types";
 
 // ------------------------------------------------------------------ tones
 // Status colors never carry meaning alone: every badge pairs an icon + label,
@@ -101,6 +102,12 @@ export function formatBytes(n: number): string {
 
 export function formatNumber(n: number): string {
   return n.toLocaleString();
+}
+
+/** "1,234 tokens" — prefixed with "~" when estimated, with the cost when there is one. */
+export function formatTokens(usage: TokenUsage): string {
+  const tokens = `${usage.estimated ? "~" : ""}${formatNumber(usage.total_tokens)} tokens`;
+  return usage.cost_usd > 0 ? `${tokens} · $${usage.cost_usd.toFixed(4)}` : tokens;
 }
 
 type Icon = ComponentType<{ className?: string; strokeWidth?: number }>;
