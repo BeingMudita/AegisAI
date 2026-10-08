@@ -225,6 +225,8 @@ export interface QuarantinedChunk {
 }
 
 export interface IngestReport {
+  section?: string;
+  folder?: string;
   document_id: string;
   title: string;
   source: string;
@@ -237,6 +239,122 @@ export interface IngestReport {
   filename: string | null;
   size_bytes: number;
   created_at: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+}
+
+export interface ArchiveDocument extends IngestReport {
+  section: string;
+  folder: string;
+  source_trust: number;
+  retrieval_allowed: boolean;
+  retrieval_reason: string | null;
+}
+
+export type ArchiveStatus = "ready" | "sanitized" | "blocked" | "low";
+export interface ArchiveChunk extends DocumentChunkView {
+  indexed: boolean;
+  status: ArchiveStatus;
+  reason: string;
+  categories: string[];
+  characters: number | null;
+  size_bytes: number | null;
+  word_count: number | null;
+  estimated_tokens: number | null;
+  excerpt_only: boolean;
+}
+export interface VectorIndexInfo {
+  backend: "memory" | "pgvector";
+  embedder: string;
+  dim: number;
+  vectors: number;
+  documents: number;
+  size_bytes: number;
+  persisted: boolean;
+}
+
+export interface VectorEntry {
+  chunk_id: string;
+  document_id: string;
+  document_title: string;
+  section: string;
+  folder: string;
+  source: string;
+  chunk_index: number;
+  preview: string;
+  characters: number;
+  firewall_action: "ALLOW" | "FLAG" | "BLOCK";
+  firewall_score: number;
+}
+
+export interface VectorPage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: VectorEntry[];
+  has_more: boolean;
+}
+
+export interface VectorNeighbour {
+  chunk_id: string;
+  document_title: string;
+  chunk_index: number;
+  similarity: number;
+  preview: string;
+}
+
+export interface VectorDetail extends VectorEntry {
+  content: string;
+  model: string;
+  dim: number;
+  norm: number;
+  vector: number[];
+  neighbours: VectorNeighbour[];
+}
+
+export interface VectorEditResult {
+  detail: VectorDetail;
+  sanitized: boolean;
+  categories: string[];
+}
+
+export type ReviewKind = "blocked" | "untrusted" | "sanitized";
+
+export interface DocumentReview extends ArchiveDocument {
+  review_kind: ReviewKind;
+  review_reason: string;
+  review_status: "pending" | "approved";
+}
+
+export interface ReviewCounts {
+  blocked: number;
+  untrusted: number;
+  sanitized: number;
+  approved: number;
+}
+
+export interface DocumentReviewPage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: DocumentReview[];
+  counts: ReviewCounts;
+  has_more: boolean;
+}
+
+export interface DeleteDocumentsResult {
+  deleted: string[];
+  missing: string[];
+}
+
+export interface ArchiveChunkPage {
+  document_id: string;
+  total: number;
+  offset: number;
+  limit: number;
+  chunks: ArchiveChunk[];
+  has_more: boolean;
 }
 
 export interface TraceEntry {

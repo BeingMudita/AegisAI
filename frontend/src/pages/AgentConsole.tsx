@@ -85,12 +85,12 @@ function Turn({ turn }: { turn: AgentTurn }) {
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm text-white shadow-sm">
+        <div className="bubble-in max-w-[85%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-sm text-on-brand shadow-sm">
           {turn.message}
         </div>
       </div>
-      <div className="flex gap-3">
-        <span className="brand-gradient mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white">
+      <div className="bubble-in-late flex gap-3">
+        <span className="brand-gradient mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-on-brand">
           <BotIcon className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1 rounded-2xl rounded-tl-md border border-edge bg-surface p-4 shadow-card">
@@ -273,7 +273,7 @@ export default function AgentConsole() {
                     setRequestId(null);
                   }}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                    a.name === agent ? "bg-accent text-white shadow-sm" : "text-ink-2 hover:text-ink"
+                    a.name === agent ? "bg-accent text-on-brand shadow-sm" : "text-ink-2 hover:text-ink"
                   }`}
                 >
                   {a.name}
@@ -300,7 +300,7 @@ export default function AgentConsole() {
             {session?.turns.map((t) => (
               <Turn key={t.id} turn={t} />
             ))}
-            {busy && <div className="rounded-lg border border-edge bg-surface-2 p-4 text-sm"><p className="mb-2 whitespace-pre-wrap">{pending}</p><span role="status" className="text-xs text-ink-2">Request in progress. Follow the execution monitor for server-reported updates.</span></div>}
+            {busy && <div className="bubble-in rounded-lg border border-edge bg-surface-2 p-4 text-sm"><p className="mb-2 whitespace-pre-wrap">{pending}</p><span role="status" className="text-xs text-ink-2">Request in progress. Follow the execution monitor for server-reported updates.</span></div>}
             <div ref={bottom} />
           </div>
 

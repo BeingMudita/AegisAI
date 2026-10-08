@@ -158,7 +158,8 @@ def test_ollama_brain_parses_tool_call() -> None:
 def test_ollama_brain_falls_back_when_unreachable() -> None:
     brain = OllamaBrain(_FakeClient(httpx.ConnectError("down")))
     assert brain.decide(_ctx("Which invoices are overdue?")).tool == "read_database"
-    assert "couldn't find" in brain.compose(_ctx("hi"))
+    assert brain.compose(_ctx("hi")).startswith("Hi! I'm FinanceAgent.")
+    assert "couldn't find" in brain.compose(_ctx("What is the parking policy for visitors?"))
 
 
 def test_ollama_brain_handles_bad_json() -> None:

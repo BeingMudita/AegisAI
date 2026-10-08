@@ -20,6 +20,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Iterator
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -30,11 +31,12 @@ import yaml
 from app.config import get_settings
 from app.database.enums import SourceType, SubjectType, TrustLevel
 from app.firewall.scanner import PromptFirewall, get_firewall
-from app.firewall.schemas import ContentChannel, FirewallAction
+from app.firewall.schemas import ContentChannel, FirewallAction, FirewallVerdict
 from app.policies.config import RagPolicy, get_global_config
 from app.rag.chunking import chunk_blocks
 from app.rag.embeddings import Embedder, get_embedder
 from app.rag.schemas import (
+    ArchiveLocation,
     DocumentChunkView,
     DroppedChunk,
     IngestReport,
@@ -48,9 +50,12 @@ from app.rag.schemas import (
     StoredChunk,
 )
 from app.rag.store import InMemoryVectorStore, VectorStore
+from app.rag.text import IDENTIFIER_IN_TEXT
+from app.rag.text import coverage as text_coverage
+from app.rag.text import terms as text_terms
 from app.telemetry.store import get_audit_log
 from app.trust.engine import TrustEngine, get_trust_engine
-from app.trust.scoring import TrustSignal
+from app.trust.scoring import SOURCE_BASE_SCORE, TrustSignal
 
 SEED_DIR = Path(__file__).parent / "seed"
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
@@ -75,6 +80,22 @@ class DuplicateDocument(Exception):
         self.existing = existing
 
 
+class ChunkRejected(Exception):
+    """The firewall blocked the new text of an edited chunk; nothing was changed."""
+
+    def __init__(self, verdict: FirewallVerdict) -> None:
+        signals = ", ".join(c.replace("_", " ").lower() for c in verdict.categories) or "injection"
+        super().__init__(
+            f"The firewall blocked this text (score {verdict.score:.2f}: {signals}). "
+            "The chunk was not changed."
+        )
+        self.verdict = verdict
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -88,6 +109,8 @@ def file_hash(path: Path) -> str:
 
 
 class KnowledgeBase:
+    backend_name = "memory"
+
     def __init__(
         self,
         *,
@@ -117,6 +140,7 @@ class KnowledgeBase:
         self._quarantine: list[QuarantinedChunk] = []
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
+        self._edit_lock = threading.Lock()  # one chunk edit/removal at a time
 
     # ------------------------------------------------------------ ingestion
     def ingest(self, req: IngestRequest) -> IngestReport:
@@ -135,6 +159,8 @@ class KnowledgeBase:
             source_type=req.source_type,
             size_bytes=len(req.content.encode("utf-8")),
             content_hash=content_hash,
+            section=req.section,
+            folder=req.folder,
         )
         self.save()
         return report
@@ -150,6 +176,8 @@ class KnowledgeBase:
         filename: str | None = None,
         size_bytes: int = 0,
         content_hash: str | None = None,
+        section: str = "Unsorted",
+        folder: str = "General",
         progress: ProgressFn | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> IngestReport:
@@ -174,6 +202,8 @@ class KnowledgeBase:
             filename=filename,
             size_bytes=size_bytes,
             content_hash=content_hash,
+            section=section,
+            folder=folder,
         )
         self._begin_document(report)
         position = {"bytes": 0}
@@ -240,6 +270,9 @@ class KnowledgeBase:
                         score=verdict.score,
                         categories=verdict.categories,
                         excerpt=text[:200],
+                        characters=len(text),
+                        size_bytes=len(text.encode("utf-8")),
+                        word_count=len(text.split()),
                     ),
                 )
                 continue
@@ -304,12 +337,114 @@ class KnowledgeBase:
         with self._lock:
             return sorted(self._documents.values(), key=lambda d: d.created_at, reverse=True)
 
-    def find_by_hash(self, content_hash: str) -> IngestReport | None:
+    def find_by_hash(
+        self,
+        content_hash: str,
+        *,
+        filename: str | None = None,
+        section: str | None = None,
+        folder: str | None = None,
+    ) -> IngestReport | None:
         """The indexed document with this content, if there is one."""
         with self._lock:
             return next(
-                (d for d in self._documents.values() if d.content_hash == content_hash), None
+                (
+                    d
+                    for d in self._documents.values()
+                    if d.content_hash == content_hash
+                    and (filename is None or d.filename == filename)
+                    and (section is None or d.section == section)
+                    and (folder is None or d.folder == folder)
+                ),
+                None,
             )
+
+    def document(self, document_id: str) -> IngestReport | None:
+        with self._lock:
+            return self._documents.get(document_id)
+
+    def move_document(self, document_id: str, location: ArchiveLocation) -> IngestReport | None:
+        with self._lock:
+            report = self._documents.get(document_id)
+            if report is None:
+                return None
+            report = report.model_copy(update=location.model_dump())
+            self._documents[document_id] = report
+        self.save(meta_only=True)
+        return report
+
+    def mark_reviewed(
+        self, document_ids: Iterable[str], *, reviewed_by: str, note: str | None = None
+    ) -> list[str]:
+        """Record that a person signed off on these documents; returns the ids found."""
+        stamp = {"reviewed_by": reviewed_by, "reviewed_at": _now(), "review_note": note}
+        with self._lock:
+            found = [d for d in dict.fromkeys(document_ids) if d in self._documents]
+            for d in found:
+                self._documents[d] = self._documents[d].model_copy(update=stamp)
+        if found:
+            self.save(meta_only=True)
+        return found
+
+    def archive_entries(self, document_id: str, offset: int, limit: int) -> list[dict[str, Any]]:
+        """One bounded index range, including quarantine excerpts retained in memory mode."""
+        end = offset + limit
+        entries = [
+            {
+                **c.model_dump(),
+                "indexed": True,
+                "characters": len(c.content),
+                "size_bytes": len(c.content.encode("utf-8")),
+                "word_count": len(c.content.split()),
+                "excerpt_only": False,
+            }
+            for c in self.store.chunks_of(document_id, limit, start_index=offset)
+            if c.chunk_index < end
+        ]
+        prefix = f"{document_id}:"
+        for q in self.quarantine():
+            if not q.chunk_id.startswith(prefix):
+                continue
+            index = int(q.chunk_id[len(prefix) :])
+            if offset <= index < end:
+                entries.append(
+                    {
+                        "chunk_index": index,
+                        "content": q.excerpt,
+                        "firewall_action": FirewallAction.BLOCK,
+                        "firewall_score": q.score,
+                        "indexed": False,
+                        "categories": q.categories,
+                        "characters": q.characters,
+                        "size_bytes": q.size_bytes,
+                        "word_count": q.word_count,
+                        "excerpt_only": q.characters is None or len(q.excerpt) < q.characters,
+                    }
+                )
+        return sorted(entries, key=lambda c: c["chunk_index"])
+
+    def _gate(self, source: str, declared_trust: TrustLevel, score: float) -> str | None:
+        if declared_trust == TrustLevel.UNTRUSTED and not self.policy.allow_untrusted_sources:
+            return f"Source '{source}' is UNTRUSTED."
+        if score < self.policy.min_source_trust:
+            return (
+                f"Source '{source}' trust {score:.2f} is below {self.policy.min_source_trust:.2f}."
+            )
+        return None
+
+    def source_gate(self, source: str, declared_trust: TrustLevel) -> tuple[float, str | None]:
+        """Use the same source gate for the explorer and actual retrieval."""
+        score = self.trust.register_source(source, declared_trust)
+        return score, self._gate(source, declared_trust, score)
+
+    def source_gates(self, reports: Iterable[IngestReport]) -> dict[str, tuple[float, str | None]]:
+        """``source_gate`` for many documents from one trust lookup (keyed by document id)."""
+        scores = {s.subject_id: s.score for s in self.trust.list_scores(SubjectType.SOURCE)}
+        result = {}
+        for r in reports:
+            score = scores.get(r.source, SOURCE_BASE_SCORE[r.trust_level])
+            result[r.document_id] = (score, self._gate(r.source, r.trust_level, score))
+        return result
 
     def document_chunks(self, document_id: str, limit: int = 50) -> list[DocumentChunkView]:
         return [
@@ -331,6 +466,91 @@ class KnowledgeBase:
         self.save()
         return True
 
+    def remove_documents(self, document_ids: Iterable[str]) -> list[str]:
+        """Remove several documents and save the index once; returns the ids removed."""
+        with self._lock:
+            removed = [
+                d for d in dict.fromkeys(document_ids) if self._documents.pop(d, None) is not None
+            ]
+        for document_id in removed:
+            self._rollback(document_id)
+        if removed:
+            self.save()
+        return removed
+
+    # -------------------------------------------------------- single chunks
+    def edit_chunk(
+        self, chunk_id: str, content: str, *, edited_by: str
+    ) -> tuple[StoredChunk, FirewallVerdict] | None:
+        """Replace one indexed chunk's text, screened and embedded like ingestion.
+
+        BLOCK raises :class:`ChunkRejected` and leaves the chunk as it was; FLAG
+        stores the sanitized text. Returns ``None`` if the chunk isn't indexed.
+        """
+        with self._edit_lock:
+            found = self.store.get(chunk_id)
+            if found is None:
+                return None
+            chunk, _ = found
+            report = self.document(chunk.document_id)
+            title = report.title if report else chunk.document_title
+            context = f"edit by {edited_by} of '{title}' chunk {chunk.chunk_index}"
+            verdict = self.firewall.scan(content, ContentChannel.RETRIEVED)
+            if verdict.action == FirewallAction.BLOCK:
+                self.firewall.record_incident(verdict, context=context)
+                raise ChunkRejected(verdict)
+            text = content
+            if verdict.action == FirewallAction.FLAG:
+                text = self.firewall.sanitize(content, verdict)
+                self.firewall.record_incident(verdict, context=context)
+            updated = chunk.model_copy(
+                update={
+                    "content": text,
+                    "firewall_action": verdict.action,
+                    "firewall_score": verdict.score,
+                }
+            )
+            if not self.store.replace(updated, self.embedder.embed([text])[0]):
+                return None
+            flagged = int(verdict.action == FirewallAction.FLAG) - int(
+                chunk.firewall_action == FirewallAction.FLAG
+            )
+            if flagged:
+                self._adjust_counts(chunk.document_id, flagged=flagged)
+        self.save()
+        logger.info(
+            "knowledge_chunk_edited", chunk_id=chunk_id, by=edited_by, action=verdict.action.value
+        )
+        return updated, verdict
+
+    def remove_chunk(self, chunk_id: str, *, removed_by: str) -> bool:
+        """Drop one chunk (and its vector) from the index; the document stays."""
+        with self._edit_lock:
+            found = self.store.get(chunk_id)
+            if found is None or not self.store.remove(chunk_id):
+                return False
+            chunk, _ = found
+            self._adjust_counts(
+                chunk.document_id,
+                indexed=-1,
+                flagged=-int(chunk.firewall_action == FirewallAction.FLAG),
+            )
+        self.save()
+        logger.info("knowledge_chunk_removed", chunk_id=chunk_id, by=removed_by)
+        return True
+
+    def _adjust_counts(self, document_id: str, *, indexed: int = 0, flagged: int = 0) -> None:
+        """Keep a document's chunk counts in step with single-chunk edits."""
+        with self._lock:
+            report = self._documents.get(document_id)
+            if report is not None:
+                self._documents[document_id] = report.model_copy(
+                    update={
+                        "chunks_indexed": max(0, report.chunks_indexed + indexed),
+                        "chunks_flagged": max(0, report.chunks_flagged + flagged),
+                    }
+                )
+
     # ------------------------------------------------------------ retrieval
     def retrieve(
         self,
@@ -347,25 +567,12 @@ class KnowledgeBase:
 
         chunks: list[RetrievedChunk] = []
         dropped: list[DroppedChunk] = []
-        for stored, similarity in self.store.search(qvec, k * 4):
+        for stored, similarity in self._ranked(query, qvec, k):
             if len(chunks) >= k:
                 break
-            if similarity < self.policy.min_similarity:
-                continue
 
             # Re-seed the source if the trust registry was reset.
-            source_trust = self.trust.register_source(stored.source, stored.declared_trust)
-            reason: str | None = None
-            if (
-                stored.declared_trust == TrustLevel.UNTRUSTED
-                and not self.policy.allow_untrusted_sources
-            ):
-                reason = f"Source '{stored.source}' is UNTRUSTED."
-            elif source_trust < self.policy.min_source_trust:
-                reason = (
-                    f"Source '{stored.source}' trust {source_trust:.2f} is below "
-                    f"{self.policy.min_source_trust:.2f}."
-                )
+            source_trust, reason = self.source_gate(stored.source, stored.declared_trust)
 
             content, sanitized = stored.content, stored.firewall_action == FirewallAction.FLAG
             if reason is None:
@@ -407,13 +614,52 @@ class KnowledgeBase:
             )
         return RetrievalResult(query=query, chunks=chunks, dropped=dropped)
 
+    def _ranked(
+        self, query: str, qvec: list[float], k: int
+    ) -> list[tuple[StoredChunk, float]]:
+        """Vector candidates re-ranked by how many of the question's words they contain.
+
+        Similarity alone favours short title stubs ("Invoice / FIN-…") and anything that
+        shares a few frequent tokens; blending in term coverage puts the passage that
+        actually talks about "invoice approval thresholds" first. Every candidate still
+        goes through the trust and firewall checks in ``retrieve``.
+        """
+        wanted = text_terms(query)
+        candidates = [
+            (stored, similarity)
+            for stored, similarity in self.store.search(qvec, max(k * 8, 40))
+            if similarity >= self.policy.min_similarity
+        ]
+        # A named identifier (FIN-000001395) is the strongest relevance signal there is:
+        # pull in the passages that contain it even if the vectors rank them low.
+        seen = {stored.id for stored, _ in candidates}
+        for ident in dict.fromkeys(IDENTIFIER_IN_TEXT.findall(query)):
+            for stored, vector in self.store.find_text(ident, 12):
+                if stored.id not in seen:
+                    seen.add(stored.id)
+                    similarity = sum(a * b for a, b in zip(qvec, vector, strict=False))
+                    candidates.append((stored, similarity))
+        if not wanted:
+            return candidates
+
+        def score(item: tuple[StoredChunk, float]) -> float:
+            stored, similarity = item
+            stub = len(stored.content) < 60  # a title or heading with nothing to answer from
+            return 0.5 * similarity + 0.5 * text_coverage(wanted, stored.content) - 0.15 * stub
+
+        return sorted(candidates, key=score, reverse=True)
+
     # ---------------------------------------------------------- persistence
-    def save(self) -> None:
-        """Write the index and document metadata to ``persist_dir`` (if enabled)."""
+    def save(self, *, meta_only: bool = False) -> None:
+        """Write the index and document metadata to ``persist_dir`` (if enabled).
+
+        ``meta_only`` skips the vectors when only document metadata changed.
+        """
         if self.persist_dir is None:
             return
         with self._save_lock:
-            self.store.save(self.persist_dir)
+            if not meta_only:
+                self.store.save(self.persist_dir)
             with self._lock:
                 meta = {
                     "embedder": self.embedder.name,

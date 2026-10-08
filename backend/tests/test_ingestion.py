@@ -235,7 +235,8 @@ def test_inbox_listing_and_import(tmp_path: Path) -> None:
     }
 
     jobs = mgr.import_inbox(None, source="Inbox", trust_level=TrustLevel.HIGH)
-    assert [j.filename for j in jobs] == ["a.md"]
+    assert [j.filename for j in jobs] == ["sub/a.md"]
+    assert (jobs[0].section, jobs[0].folder) == ("sub", "General")
     assert mgr.wait(jobs[0].id).stage == IngestStage.COMPLETED  # type: ignore[union-attr]
 
 

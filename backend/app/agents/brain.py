@@ -27,6 +27,7 @@ from typing import Any, Protocol
 import httpx
 import structlog
 
+from app.agents import conversation
 from app.agents.schemas import AgentAction, TurnContext
 from app.config import get_settings
 from app.policies.config import get_global_config
@@ -57,6 +58,16 @@ def _tool_outputs(ctx: TurnContext) -> str:
 
 def _failed_checkpoint(step: ToolCallResult) -> str:
     return next((c.checkpoint for c in step.checks if not c.passed), "gateway")
+
+
+# How a tool's result is introduced in a reply.
+_RESULT_LEAD = {
+    "read_database": "Here's what the finance database shows:",
+    "generate_report": "I put together this report:",
+    "web_fetch": "Here's what the page says:",
+    "send_email": "Done — the email was sent:",
+    "search_documents": "Here's what the search returned:",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -141,7 +152,17 @@ class RuleBasedBrain:
             )
         return AgentAction(kind="answer", thought="Answer from the retrieved context.")
 
+    def needs_context(self, message: str) -> bool:
+        return conversation.needs_context(message)
+
     def compose(self, ctx: TurnContext) -> str:
+        """A reply in plain language: small talk gets a friendly answer, a question gets
+        the sentences that answer it (with the source), and when nothing does, the
+        agent says so and asks what the person means instead of guessing."""
+        kind = conversation.intent(ctx.message)
+        if kind != "question" and not ctx.steps:
+            return conversation.small_talk(kind, ctx.agent, ctx.tools, bool(ctx.history))
+
         parts: list[str] = []
         pending = [s for s in ctx.steps if s.pending]
         denied = [s for s in ctx.steps if not s.executed and not s.pending]
@@ -151,35 +172,34 @@ class RuleBasedBrain:
             out = step.output or ""
             if len(out) > _MAX_OUTPUT_CHARS:
                 out = out[:_MAX_OUTPUT_CHARS] + " …"
-            parts.append(f"**Result from `{step.tool}`:**\n{out}")
+            lead = _RESULT_LEAD.get(step.tool, f"Result from `{step.tool}`:")
+            parts.append(f"{lead}\n\n{out}")
 
-        if ctx.context:
-            lines = []
-            for chunk in ctx.context[:3]:
-                text = re.sub(r"^#+\s*", "", chunk.content, flags=re.MULTILINE).replace("\n", " ")
-                lines.append(f"- *{chunk.document_title}*: {text[:400]}")
-            parts.append("**From the knowledge base:**\n" + "\n".join(lines))
+        found = conversation.answer(ctx.message, ctx.context)
+        if found:
+            parts.append(found)
 
         if pending:
             lines = [
                 f"- `{s.tool}` passed every automatic check and is waiting for an "
-                f"administrator to approve it (request `{s.id[:8]}`)."
+                f"administrator to approve it in Approvals (request `{s.id[:8]}`)."
                 for s in pending
             ]
             parts.append("**Waiting for human approval:**\n" + "\n".join(lines))
 
         if denied:
             lines = [
-                f"- `{s.tool}` was blocked at the **{_failed_checkpoint(s)}** check: "
-                f"{s.decision_reason}"
+                f"- I wasn't allowed to use `{s.tool}` — it was stopped at the "
+                f"**{_failed_checkpoint(s)}** check: {s.decision_reason}"
                 for s in denied
             ]
             parts.append(
-                "**Some actions were not allowed by security policy:**\n" + "\n".join(lines)
+                "**I couldn't do all of that — security policy stopped part of it:**\n"
+                + "\n".join(lines)
             )
 
         if not parts:
-            return "I couldn't find relevant information in the knowledge base for that request."
+            return conversation.clarify(ctx.message, ctx.context, ctx.tools)
         return "\n\n".join(parts)
 
 
@@ -277,6 +297,9 @@ class OllamaBrain:
         self.client = client
         self.fallback = fallback or RuleBasedBrain()
         self.name = f"ollama:{client.model}"
+
+    def needs_context(self, message: str) -> bool:
+        return conversation.needs_context(message)
 
     def _call_timeout(self, ctx: TurnContext) -> float | None:
         """Seconds the next LLM call may take, or None once the turn budget is spent."""

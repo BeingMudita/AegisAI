@@ -33,8 +33,8 @@ const TOOLTIP = {
   cursor: { fill: "var(--grid)", fillOpacity: 0.6 },
 };
 
-export const ALLOWED_COLOR = "#2a78d6";
-export const DENIED_COLOR = "var(--critical)";
+export const ALLOWED_COLOR = "var(--chart-allowed)";
+export const DENIED_COLOR = "var(--chart-denied)";
 
 /** A chart card with a Chart / Table toggle so values are never chart-only. */
 export function ChartCard({

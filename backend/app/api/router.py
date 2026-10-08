@@ -26,6 +26,7 @@ from app.api.routes import (
     tools,
     trust,
     usage,
+    vectors,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -51,3 +52,4 @@ api_router.include_router(adaptive.router)
 api_router.include_router(autopilot.router)
 api_router.include_router(attack_surface.router)
 api_router.include_router(threatintel.router)
+api_router.include_router(vectors.router)

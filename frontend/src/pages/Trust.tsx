@@ -98,6 +98,7 @@ export default function Trust() {
                           <span className="tabular w-9 text-xs">{s.score.toFixed(2)}</span>
                           <Meter
                             value={s.score}
+                            tone={trustTone(s.level)}
                             markers={[{ at: threshold, label: "threshold" }]}
                             label={`${s.subject_id} trust`}
                           />

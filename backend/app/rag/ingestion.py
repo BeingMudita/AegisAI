@@ -28,6 +28,7 @@ from app.config import get_settings
 from app.database.enums import SourceType, TrustLevel
 from app.rag.knowledge_base import IngestCancelled, KnowledgeBase, file_hash, get_knowledge_base
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported, iter_blocks
+from app.rag.paths import archive_location, file_source
 from app.rag.schemas import InboxFile, InboxListing, IngestJob, IngestReport, IngestStage
 
 logger = structlog.get_logger("aegisai.ingestion")
@@ -63,6 +64,8 @@ class IngestionManager:
         delete_after: bool = False,
         filename: str | None = None,
         content_hash: str | None = None,
+        section: str = "Unsorted",
+        folder: str = "General",
     ) -> IngestJob:
         job = IngestJob(
             filename=filename or path.name,
@@ -71,6 +74,8 @@ class IngestionManager:
             trust_level=trust_level,
             origin=origin,
             size_bytes=path.stat().st_size,
+            section=section,
+            folder=folder,
         )
         with self._lock:
             self._jobs[job.id] = job
@@ -125,20 +130,30 @@ class IngestionManager:
         source: str,
         trust_level: TrustLevel,
         source_per_file: bool = False,
+        section: str = "Unsorted",
+        folder: str = "General",
     ) -> list[IngestJob]:
         names = files if files is not None else [f.path for f in self.list_inbox().files]
-        jobs = []
+        prepared = []
         for name in names:
             path = self.resolve_inbox(name)
             if not is_supported(path.name):
                 continue
+            relative = path.relative_to(self.inbox_dir.resolve()).as_posix()
+            location = archive_location(relative, section, folder)
+            prepared.append((path, relative, location))
+        jobs = []
+        for path, relative, location in prepared:
             jobs.append(
                 self.submit(
                     path,
                     title=path.name,
-                    source=path.name if source_per_file else source,
+                    source=file_source(relative) if source_per_file else source,
                     trust_level=trust_level,
                     origin="inbox",
+                    section=location.section,
+                    folder=location.folder,
+                    filename=relative,
                 )
             )
         return jobs
@@ -217,7 +232,14 @@ class IngestionManager:
 
         try:
             content_hash = content_hash or file_hash(path)
-            if existing := self.kb.find_by_hash(content_hash):
+            # Folder imports preserve separate physical copies in separate locations.
+            # Re-uploading the same path/content remains idempotent.
+            identity = (
+                {"filename": job.filename, "section": job.section, "folder": job.folder}
+                if "/" in job.filename
+                else {}
+            )
+            if existing := self.kb.find_by_hash(content_hash, **identity):
                 with self._lock:
                     job.stage = IngestStage.COMPLETED
                     job.duplicate_of = job.document_id = existing.document_id
@@ -232,6 +254,8 @@ class IngestionManager:
                 filename=job.filename,
                 size_bytes=job.size_bytes,
                 content_hash=content_hash,
+                section=job.section,
+                folder=job.folder,
                 progress=progress,
                 should_cancel=lambda: self._should_cancel(job_id),
             )

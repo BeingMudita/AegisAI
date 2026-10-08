@@ -1,9 +1,10 @@
-import { CheckCircle2, Clock3, Hourglass, ShieldCheck, UserCheck, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, Clock3, FileWarning, Hourglass, ShieldCheck, UserCheck, XCircle } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../api";
 import { useAuth } from "../auth";
-import { Badge, Button, Card, Empty, ErrorNote, PageHeader, StatTile, actionTone, inputClass } from "../components/ui";
+import DocumentReviews from "../components/DocumentReviews";
+import { Badge, Button, Card, Empty, ErrorNote, PageHeader, StatTile, Tabs, actionTone, inputClass } from "../components/ui";
 import { formatTime, useApi } from "../hooks";
 import type { ApprovalQueue, ToolCall } from "../types";
 
@@ -120,16 +121,32 @@ function PendingCard({ request, canDecide, onDone }: { request: ToolCall; canDec
 export default function Approvals() {
   const { user } = useAuth();
   const queue = useApi<ApprovalQueue>("/api/approvals", 3000);
+  const waiting = useApi<{ pending: number; tools: number; documents: number }>("/api/approvals/pending-count", 10000);
   const pending = queue.data?.pending ?? [];
   const recent = queue.data?.recent ?? [];
   const count = (pred: (r: ToolCall) => boolean) => recent.filter(pred).length;
+  // Open on whichever queue has something waiting (agent actions first).
+  const [chosen, setChosen] = useState<"agent" | "documents" | null>(null);
+  const tab = chosen ?? (pending.length || !waiting.data?.documents ? "agent" : "documents");
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Approvals"
-        description="High-impact agent actions stop here for a human decision. Each request has already passed every automatic checkpoint; approving re-verifies all of them at that moment before the action runs. Rejecting lowers the agent's trust."
+        description="Everything that waits for a person. Agent actions: high-impact requests that passed every automatic checkpoint (approving re-verifies them before the action runs; rejecting lowers the agent's trust). Documents: uploads where the ingestion firewall found something, to keep or remove."
       />
+      <Tabs
+        tabs={[
+          { id: "agent" as const, label: "Agent actions", icon: Bot, count: pending.length },
+          { id: "documents" as const, label: "Documents", icon: FileWarning, count: waiting.data?.documents },
+        ]}
+        value={tab}
+        onChange={setChosen}
+      />
+      {tab === "documents" ? (
+        <DocumentReviews admin={user?.role === "ADMIN"} onChanged={() => void waiting.reload()} />
+      ) : (
+      <div className="reveal space-y-6">
       <ErrorNote message={queue.error} />
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatTile icon={Hourglass} tone="warning" label="Waiting" value={pending.length} note="need a decision" />
@@ -216,6 +233,8 @@ export default function Approvals() {
           <Empty>No decisions yet.</Empty>
         )}
       </Card>
+      </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,9 @@
 import {
+  ArrowUpRight,
   Binary,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
   Copy,
   Database,
@@ -40,6 +43,7 @@ import {
   trustTone,
 } from "../components/ui";
 import { useApi } from "../hooks";
+import { ACCEPTED_DOCUMENTS, droppedFiles, selectedFiles, supportedDocument, uploadKey, type UploadSelection } from "../upload-files";
 import type {
   DocumentChunkView,
   InboxListing,
@@ -51,6 +55,8 @@ import type {
   TrustLevel,
 } from "../types";
 
+const DOC_PAGE = 50;
+
 const LEVELS: { value: TrustLevel; hint: string }[] = [
   { value: "VERIFIED", hint: "official, reviewed content" },
   { value: "HIGH", hint: "internal team documents" },
@@ -59,7 +65,6 @@ const LEVELS: { value: TrustLevel; hint: string }[] = [
   { value: "UNTRUSTED", hint: "public web — never shown to agents" },
 ];
 
-const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.log,.csv,.tsv,.json,.jsonl,.ndjson,.html,.htm";
 const STAGE_ORDER = ["PARSING", "SCREENING", "EMBEDDING", "INDEXING", "COMPLETED"] as const;
 const STAGE_LABEL: Record<string, string> = {
   QUEUED: "Queued",
@@ -96,6 +101,8 @@ function errorText(e: unknown): string {
 }
 
 interface SourceSettings {
+  section: string;
+  folder: string;
   perFile: boolean;
   source: string;
   trust: TrustLevel;
@@ -134,6 +141,8 @@ function SourceFields({ value, onChange }: { value: SourceSettings; onChange: (v
           <span className="mb-1 block text-xs font-medium text-ink-2">How much do you trust it?</span>
           <TrustSelect value={value.trust} onChange={(trust) => onChange({ ...value, trust })} />
         </label>
+        <label className="text-sm"><span className="mb-1 block text-xs font-medium text-ink-2">Archive section</span><input className={inputClass} maxLength={80} value={value.section} onChange={e => onChange({ ...value, section: e.target.value })} placeholder="e.g. Finance" /></label>
+        <label className="text-sm"><span className="mb-1 block text-xs font-medium text-ink-2">Archive folder</span><input className={inputClass} maxLength={1024} value={value.folder} onChange={e => onChange({ ...value, folder: e.target.value })} placeholder="e.g. Invoices" /></label>
       </div>
     </div>
   );
@@ -141,35 +150,60 @@ function SourceFields({ value, onChange }: { value: SourceSettings; onChange: (v
 
 // ------------------------------------------------------------------ upload
 function UploadPanel({ onQueued }: { onQueued: () => void }) {
-  const [files, setFiles] = useState<File[]>([]);
-  const [settings, setSettings] = useState<SourceSettings>({ perFile: true, source: "Uploads", trust: "MEDIUM" });
+  const [files, setFiles] = useState<UploadSelection[]>([]);
+  const [reading, setReading] = useState(false);
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const [queued, setQueued] = useState(0);
+  const [settings, setSettings] = useState<SourceSettings>({ perFile: true, source: "Uploads", trust: "MEDIUM", section: "Unsorted", folder: "General" });
   const [drag, setDrag] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const busy = reading || progress !== null;
 
-  function add(list: FileList | null) {
-    if (list) setFiles((prev) => [...prev, ...Array.from(list)]);
+  function add(items: UploadSelection[]) {
+    const valid = items.filter(item => supportedDocument(item.file.name));
+    setSkipped(items.filter(item => !supportedDocument(item.file.name)).map(item => item.path));
+    setFiles(prev => [...new Map([...prev, ...valid].map(item => [uploadKey(item), item])).values()]);
+    if (!items.length) setError("No files were found. Empty folders do not contain documents to index.");
   }
 
-  function onDrop(e: DragEvent) {
+  async function onDrop(e: DragEvent) {
     e.preventDefault();
     setDrag(false);
-    add(e.dataTransfer.files);
+    if (busy) return;
+    setReading(true); setError(null); setQueued(0);
+    try { add(await droppedFiles(e.dataTransfer)); }
+    catch (error) { setError(`Could not read this folder: ${errorText(error)}. Try Choose folder.`); }
+    finally { setReading(false); }
   }
 
   async function send() {
     setError(null);
     setProgress(0);
-    const form = new FormData();
-    files.forEach((f) => form.append("files", f));
-    form.append("source", settings.source || "Uploads");
-    form.append("trust_level", settings.trust);
-    form.append("source_per_file", String(settings.perFile));
+    setQueued(0);
+    const total = files.reduce((sum, item) => sum + Math.max(1, item.file.size), 0);
+    let sent = 0;
     try {
-      await upload<IngestJob[]>("/api/retrieval/uploads", form, setProgress);
-      setFiles([]);
-      onQueued();
+      // Bound multipart counts so large folders don't exceed the server's request limits.
+      for (let start = 0; start < files.length; start += 25) {
+        const batch = files.slice(start, start + 25);
+        const form = new FormData();
+        batch.forEach(({ file, path }) => { form.append("files", file); form.append("relative_paths", path); });
+        form.append("source", settings.source || "Uploads");
+        form.append("trust_level", settings.trust);
+        form.append("source_per_file", String(settings.perFile));
+        form.append("section", settings.section.trim() || "Unsorted");
+        form.append("folder", settings.folder.trim() || "General");
+        const weight = batch.reduce((sum, item) => sum + Math.max(1, item.file.size), 0);
+        await upload<IngestJob[]>("/api/retrieval/uploads", form, fraction => setProgress((sent + weight * fraction) / total));
+        sent += weight;
+        const accepted = new Set(batch.map(uploadKey));
+        setFiles(prev => prev.filter(item => !accepted.has(uploadKey(item))));
+        setQueued(start + batch.length);
+        onQueued();
+      }
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -179,13 +213,14 @@ function UploadPanel({ onQueued }: { onQueued: () => void }) {
 
   return (
     <Card
-      title="Upload files"
-      subtitle="Drag files here from your computer. Each file is processed in the background."
+      title="Upload files or folders"
+      subtitle="Choose a folder or drop it here. Files in every subfolder are processed in the background."
       icon={UploadCloud}
     >
       <div className="space-y-4">
         <button
           type="button"
+          disabled={busy}
           onClick={() => input.current?.click()}
           onDragOver={(e) => {
             e.preventDefault();
@@ -198,22 +233,26 @@ function UploadPanel({ onQueued }: { onQueued: () => void }) {
           }`}
         >
           <UploadCloud className="h-9 w-9 text-accent" strokeWidth={1.5} />
-          <span className="text-sm font-medium text-ink">Drop files here or click to browse</span>
+          <span className="text-sm font-medium text-ink">{reading ? "Reading folder contents…" : "Drop files or folders here"}</span>
           <span className="text-xs text-muted">PDF, Word (.docx), TXT, MD, CSV, TSV, JSON, JSONL, HTML, LOG</span>
         </button>
-        <input ref={input} type="file" multiple accept={ACCEPT} hidden onChange={(e) => add(e.target.files)} />
+        <div className="flex gap-2"><Button variant="ghost" disabled={busy} onClick={() => input.current?.click()}><FileText className="h-4 w-4" />Choose files</Button><Button variant="ghost" disabled={busy} onClick={() => folderInput.current?.click()}><FolderOpen className="h-4 w-4" />Choose folder</Button></div>
+        <input ref={input} aria-label="Files to upload" type="file" multiple accept={ACCEPTED_DOCUMENTS} hidden disabled={busy} onChange={e => { setError(null); setQueued(0); if (e.target.files) add(selectedFiles(e.target.files)); e.target.value = ""; }} />
+        <input ref={folderInput} aria-label="Folder to upload" type="file" multiple {...{ webkitdirectory: "" }} hidden disabled={busy} onChange={e => { setError(null); setQueued(0); if (e.target.files) add(selectedFiles(e.target.files)); e.target.value = ""; }} />
+        <p className="text-xs leading-relaxed text-ink-2">Folder names and subfolder paths are preserved. With section “Unsorted”, the top folder becomes the section; subfolders become archive folders (for example, Finance → Invoices/2026). Empty folders are not indexed.</p>
 
         {files.length > 0 && (
           <ul className="max-h-40 divide-y divide-edge overflow-auto rounded-lg border border-edge">
-            {files.map((f, i) => (
-              <li key={`${f.name}-${i}`} className="flex items-center gap-2 px-3 py-2 text-sm">
+            {files.slice(0, 200).map((item, i) => (
+              <li key={uploadKey(item)} className="flex items-center gap-2 px-3 py-2 text-sm">
                 <FileText className="h-4 w-4 shrink-0 text-muted" />
-                <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                <span className="tabular text-xs text-muted">{formatBytes(f.size)}</span>
+                <span className="min-w-0 flex-1 truncate" title={item.path}>{item.path}</span>
+                <span className="tabular text-xs text-muted">{formatBytes(item.file.size)}</span>
                 <button
                   onClick={() => setFiles(files.filter((_, j) => j !== i))}
+                  disabled={busy}
                   className="rounded p-0.5 text-muted hover:text-ink"
-                  aria-label={`Remove ${f.name}`}
+                  aria-label={`Remove ${item.path}`}
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -222,7 +261,10 @@ function UploadPanel({ onQueued }: { onQueued: () => void }) {
           </ul>
         )}
 
-        <SourceFields value={settings} onChange={setSettings} />
+        {files.length > 200 && <p className="text-xs text-ink-2">Showing the first 200 of {files.length} selected files. All selected files will upload.</p>}
+        {skipped.length > 0 && <details className="text-xs text-ink-2"><summary>Skipped {skipped.length} unsupported files</summary><ul className="mt-2 max-h-32 overflow-auto break-all">{skipped.map((path, i) => <li key={`${path}-${i}`}>{path}</li>)}</ul></details>}
+        <fieldset disabled={busy}><SourceFields value={settings} onChange={setSettings} /></fieldset>
+        {queued > 0 && <p role="status" className="text-xs text-ink-2">{queued} files queued for processing. {files.length > 0 ? `${files.length} files remain to upload.` : "Check the processing queue below for results."}</p>}
 
         {progress !== null && (
           <div>
@@ -234,7 +276,7 @@ function UploadPanel({ onQueued }: { onQueued: () => void }) {
           </div>
         )}
         <ErrorNote message={error} />
-        <Button onClick={() => void send()} disabled={!files.length || progress !== null} className="w-full">
+        <Button onClick={() => void send()} disabled={!files.length || busy} className="w-full">
           <UploadCloud className="h-4 w-4" />
           {files.length ? `Upload ${files.length} file${files.length > 1 ? "s" : ""}` : "Choose files to upload"}
         </Button>
@@ -246,7 +288,7 @@ function UploadPanel({ onQueued }: { onQueued: () => void }) {
 // ------------------------------------------------------------------- inbox
 function InboxPanel({ onQueued }: { onQueued: () => void }) {
   const inbox = useApi<InboxListing>("/api/retrieval/inbox");
-  const [settings, setSettings] = useState<SourceSettings>({ perFile: true, source: "Inbox", trust: "MEDIUM" });
+  const [settings, setSettings] = useState<SourceSettings>({ perFile: true, source: "Inbox", trust: "MEDIUM", section: "Unsorted", folder: "General" });
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const supported = inbox.data?.files.filter((f) => f.supported) ?? [];
@@ -259,6 +301,8 @@ function InboxPanel({ onQueued }: { onQueued: () => void }) {
         source: settings.source || "Inbox",
         trust_level: settings.trust,
         source_per_file: settings.perFile,
+        section: settings.section.trim() || "Unsorted",
+        folder: settings.folder.trim() || "General",
       });
       onQueued();
     } catch (e) {
@@ -325,7 +369,7 @@ function InboxPanel({ onQueued }: { onQueued: () => void }) {
 }
 
 function PastePanel({ onDone }: { onDone: () => void }) {
-  const [doc, setDoc] = useState({ title: "", source: "", trust_level: "MEDIUM" as TrustLevel, content: "" });
+  const [doc, setDoc] = useState({ title: "", source: "", trust_level: "MEDIUM" as TrustLevel, content: "", section: "Unsorted", folder: "General" });
   const [report, setReport] = useState<IngestReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -360,6 +404,8 @@ function PastePanel({ onDone }: { onDone: () => void }) {
           onChange={(e) => setDoc({ ...doc, source: e.target.value })}
         />
         <TrustSelect value={doc.trust_level} onChange={(v) => setDoc({ ...doc, trust_level: v })} />
+        <label className="text-xs text-ink-2">Archive section<input className={inputClass} required maxLength={80} value={doc.section} onChange={e => setDoc({ ...doc, section: e.target.value })} /></label>
+        <label className="text-xs text-ink-2">Archive folder<input className={inputClass} required maxLength={1024} value={doc.folder} onChange={e => setDoc({ ...doc, folder: e.target.value })} /></label>
         <textarea
           className={`${inputClass} min-h-28 sm:col-span-3`}
           placeholder="Paste the document text…"
@@ -473,6 +519,12 @@ export default function KnowledgeBase() {
   const [result, setResult] = useState<RetrievalResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openDoc, setOpenDoc] = useState<string | null>(null);
+  // The table draws one page at a time: thousands of rows at once make the tab sluggish.
+  const [docPage, setDocPage] = useState(0);
+  const docRows = documents.data ?? [];
+  const docPages = Math.max(1, Math.ceil(docRows.length / DOC_PAGE));
+  const docCurrent = Math.min(docPage, docPages - 1);
+  const visibleDocs = docRows.slice(docCurrent * DOC_PAGE, (docCurrent + 1) * DOC_PAGE);
   const chunks = useApi<DocumentChunkView[]>(openDoc ? `/api/retrieval/documents/${openDoc}/chunks` : null);
 
   const s = stats.data;
@@ -598,7 +650,7 @@ export default function KnowledgeBase() {
         <ErrorNote message={error} />
 
         {tab === "add" && admin && (
-          <div className="space-y-6">
+          <div className="reveal space-y-6">
             <div className="grid items-stretch gap-6 lg:grid-cols-2">
               <UploadPanel onQueued={refreshAll} />
               <InboxPanel onQueued={refreshAll} />
@@ -625,10 +677,17 @@ export default function KnowledgeBase() {
 
         {tab === "documents" && staff && (
           <Card
+            className="reveal"
             title="Documents in the knowledge base"
             subtitle="Newest first. Expand a row to see its chunks as they were indexed."
+            actions={
+              <a href="#/database" className="inline-flex items-center gap-1 text-xs font-medium text-ink-2 hover:text-ink hover:underline">
+                Folders, sorting and bulk delete in Database <ArrowUpRight className="h-3.5 w-3.5" />
+              </a>
+            }
           >
             {documents.data?.length ? (
+              <>
               <div className="-mx-5 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -644,7 +703,7 @@ export default function KnowledgeBase() {
                     </tr>
                   </thead>
                   <tbody>
-                    {documents.data.map((d) => (
+                    {visibleDocs.map((d) => (
                       <Fragment key={d.document_id}>
                         <tr className="border-b border-edge hover:bg-surface-2/60">
                           <td className="px-5 py-2.5">
@@ -715,6 +774,23 @@ export default function KnowledgeBase() {
                   </tbody>
                 </table>
               </div>
+              <div className="-mb-1 flex flex-wrap items-center justify-between gap-3 pt-3 text-xs text-muted">
+                <span className="tabular">
+                  Showing {formatNumber(docCurrent * DOC_PAGE + 1)}–{formatNumber(Math.min((docCurrent + 1) * DOC_PAGE, docRows.length))} of {formatNumber(docRows.length)} documents
+                </span>
+                {docPages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" disabled={docCurrent === 0} onClick={() => { setDocPage(docCurrent - 1); setOpenDoc(null); }} aria-label="Previous page">
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <span className="tabular">{docCurrent + 1} / {docPages}</span>
+                    <Button variant="ghost" size="sm" disabled={docCurrent + 1 >= docPages} onClick={() => { setDocPage(docCurrent + 1); setOpenDoc(null); }} aria-label="Next page">
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+              </>
             ) : (
               <Empty icon={Layers}>No documents yet.</Empty>
             )}
@@ -723,6 +799,7 @@ export default function KnowledgeBase() {
 
         {tab === "search" && (
           <Card
+            className="reveal"
             title="Test search"
             subtitle="See exactly what an agent would get back — and what was filtered out and why."
             icon={Search}
@@ -769,6 +846,7 @@ export default function KnowledgeBase() {
 
         {tab === "quarantine" && staff && (
           <Card
+            className="reveal"
             title="Quarantine"
             subtitle="Chunks the firewall refused to index. They are kept here for review and never shown to agents."
             icon={ShieldAlert}
@@ -801,6 +879,7 @@ export default function KnowledgeBase() {
 
         {tab === "sources" && staff && (
           <Card
+            className="reveal"
             title="Sources"
             subtitle="A source that serves injected content loses trust; below 0.30 its chunks are no longer retrieved."
             icon={Database}
@@ -828,6 +907,7 @@ export default function KnowledgeBase() {
                           <span className="tabular w-9 text-xs">{src.trust_score.toFixed(2)}</span>
                           <Meter
                             value={src.trust_score}
+                            tone={trustTone(src.trust_level)}
                             markers={[{ at: 0.3, label: "retrieval cut-off 0.30" }]}
                             label={`${src.source} trust`}
                           />

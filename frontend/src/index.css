@@ -1,86 +1,40 @@
 @import "@fontsource-variable/inter";
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------------
-   Design tokens. Light is the default; dark has its own selected steps (not an
-   automatic flip). The OS setting applies unless the viewer picked a theme.
-   Chart colors: series-1 for single-series magnitude; allowed/denied pair is
-   blue ↔ red (validated for CVD — green ↔ red fails); status colors are
-   reserved for state and always ship with an icon + label.
---------------------------------------------------------------------------- */
+/* One dark theme for the whole workspace, including sign-in and lazy routes.
+   Surfaces stay monochrome; colour is reserved for status, on one ordered scale:
+   green (approved/trusted) → yellow (medium) → orange (low trust/untrusted) →
+   red (blocked/harmful). Each step clears 3:1 on --surface and --surface-2 and
+   stays distinguishable with colour-blindness; status always ships with an icon
+   or label too, never colour alone. */
 :root {
-  color-scheme: light;
-  --page: #f6f7f9;
-  --surface: #ffffff;
-  --surface-2: #f1f4f5;
-  --ink: #192b32;
-  --ink-2: #53656d;
-  --muted: #677981;
-  --grid: #e5e7ec;
-  --axis: #c9ccd4;
-  --border: rgba(15, 23, 42, 0.09);
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
-  --series-1: #147d79;
-  --series-1-track: #cce8e3;
-  --brand: #147d79;
-  --brand-2: #147d79;
-  --good: #278361;
-  --warning: #aa7416;
-  --serious: #ec835a;
-  --critical: #d03b3b;
-  --nav-bg: #ffffff;
-  --nav-ink: #233a42;
-  --nav-ink-2: #667b84;
-  --nav-hover: #f1f5f5;
-  --nav-active: #e8f3f0;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --page: #0b0d12;
-    --surface: #151821;
-    --surface-2: #1d212c;
-    --ink: #f1f5f9;
-    --ink-2: #b4bccb;
-    --muted: #7d8595;
-    --grid: #262b37;
-    --axis: #363c4a;
-    --border: rgba(255, 255, 255, 0.08);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --series-1: #3987e5;
-    --series-1-track: #184f95;
-    --brand: #3987e5;
-    --brand-2: #9085e9;
-    --nav-bg: #080b12;
-    --nav-ink: #e2e8f0;
-    --nav-ink-2: #9eafba;
-    --nav-hover: #1d2530;
-    --nav-active: #183a3c;
-  }
-}
-
-:root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #0b0d12;
-  --surface: #151821;
-  --surface-2: #1d212c;
-  --ink: #f1f5f9;
-  --ink-2: #b4bccb;
-  --muted: #7d8595;
-  --grid: #262b37;
-  --axis: #363c4a;
-  --border: rgba(255, 255, 255, 0.08);
+  --page: #090909;
+  --surface: #111111;
+  --surface-2: #1b1b1b;
+  --ink: #efefef;
+  --ink-2: #aaaaaa;
+  --muted: #919191;
+  --grid: #292929;
+  --axis: #444444;
+  --border: #2c2c2c;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --series-1: #3987e5;
-  --series-1-track: #184f95;
-  --brand: #3987e5;
-  --brand-2: #9085e9;
-  --nav-bg: #080b12;
-  --nav-ink: #e2e8f0;
-  --nav-ink-2: #9eafba;
-  --nav-hover: #1d2530;
-  --nav-active: #183a3c;
+  --series-1: #dedede;
+  --series-1-track: #333333;
+  --brand: #eeeeee;
+  --brand-2: #aaaaaa;
+  --on-brand: #151515;
+  --good: #34d399;
+  --warning: #facc15;
+  --serious: #fb7a2e;
+  --critical: #dc2650;
+  --chart-allowed: #34d399;
+  --chart-denied: #dc2650;
+  --nav-bg: #0d0d0d;
+  --nav-ink: #eeeeee;
+  --nav-ink-2: #999999;
+  --nav-hover: #202020;
+  --nav-active: #2b2b2b;
 }
 
 @theme inline {
@@ -94,6 +48,7 @@
   --color-edge: var(--border);
   --color-accent: var(--series-1);
   --color-brand: var(--brand);
+  --color-on-brand: var(--on-brand);
   --color-good: var(--good);
   --color-warning: var(--warning);
   --color-serious: var(--serious);
@@ -119,6 +74,7 @@ body {
 
 .brand-gradient {
   background: var(--brand);
+  color: var(--on-brand);
 }
 
 /* Recharts focus outline on click is noise; keyboard focus still shows. */
@@ -174,6 +130,7 @@ body {
 :root { font-synthesis: none; }
 body { margin: 0; }
 button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+input { accent-color: var(--brand); }
 button:not(:disabled), summary { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 main:focus { outline: none; }
@@ -186,7 +143,7 @@ main:focus { outline: none; }
 .workspace-intro { display: grid; grid-template-columns: 1.6fr 1fr; gap: 32px; padding: 36px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .workspace-intro h2 { margin-top: 16px; font-size: clamp(24px, 2.5vw, 36px); line-height: 1.22; letter-spacing: -.045em; font-weight: 600; }
 .workspace-intro p { margin-top: 16px; font-size: 13px; color: var(--ink-2); max-width: 480px; line-height: 1.75; }
-.primary-link { display: inline-flex; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; padding: 11px 16px; background: var(--brand); color: white; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.primary-link { display: inline-flex; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; padding: 11px 16px; background: var(--brand); color: var(--on-brand); border-radius: 6px; font-size: 12px; font-weight: 600; }
 .primary-link:hover { filter: brightness(1.1); }
 .intro-note { align-self: center; justify-self: end; width: min(100%, 300px); padding: 26px; border-left: 2px solid var(--brand); background: var(--surface-2); border-radius: 0 8px 8px 0; }
 .intro-note > svg { color: var(--brand); margin-bottom: 16px; }
@@ -227,9 +184,9 @@ main:focus { outline: none; }
 .process-step.running::before { background: var(--brand); animation: process-pulse 1.2s ease-in-out infinite; }
 .process-step.stopped .process-icon { border-color: var(--critical); color: var(--critical); }
 .auth-shell { display: grid; min-height: 100vh; grid-template-columns: 1.1fr 1fr; background: var(--surface); }
-.auth-story { display: flex; flex-direction: column; justify-content: space-between; background: #183e43; color: #eef6f5; padding: clamp(32px, 5vw, 80px); }
+.auth-story { display: flex; flex-direction: column; justify-content: space-between; background: radial-gradient(ellipse at 30% 70%, #242424, #0d0d0d 70%); color: var(--ink); border-right: 1px solid var(--border); padding: clamp(32px, 5vw, 80px); }
 .auth-story h1 { max-width: 540px; font-size: clamp(36px, 4vw, 60px); line-height: 1.12; font-weight: 500; letter-spacing: -.05em; margin: 48px 0 24px; }
-.auth-story > div > p { max-width: 420px; line-height: 1.8; color: #c0d3d3; font-size: 14px; }
+.auth-story > div > p { max-width: 420px; line-height: 1.8; color: var(--ink-2); font-size: 14px; }
 .auth-features { margin: 40px 0; border-top: 1px solid #ffffff26; }
 .auth-features li { display: flex; align-items: center; gap: 16px; padding: 18px 0; border-bottom: 1px solid #ffffff26; font-size: 13px; }
 .auth-form { display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
@@ -251,3 +208,61 @@ main:focus { outline: none; }
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 
+
+/* --- Motion ----------------------------------------------------------------
+   Movement explains a change and then gets out of the way: a page arriving,
+   a tab or panel opening, a message landing, a value filling in. Only opacity
+   and transform animate (cheap to draw, no layout jank). With "reduce motion"
+   set in the OS, none of it plays. */
+:root {
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-fast: 160ms;
+  --motion: 280ms;
+  --motion-slow: 460ms;
+}
+@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes grow-x { from { transform: scaleX(0); } to { transform: none; } }
+@keyframes slide-in-left { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes bubble-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes badge-pop { 0% { transform: scale(.5); } 60% { transform: scale(1.15); } 100% { transform: none; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* A page arrives: its sections rise in one after another. */
+  .page-enter > * > * { animation: rise-in var(--motion-slow) var(--ease-out) both; }
+  .page-enter > * > :nth-child(2) { animation-delay: 50ms; }
+  .page-enter > * > :nth-child(3) { animation-delay: 100ms; }
+  .page-enter > * > :nth-child(4) { animation-delay: 150ms; }
+  .page-enter > * > :nth-child(5) { animation-delay: 200ms; }
+  .page-enter > * > :nth-child(n+6) { animation-delay: 250ms; }
+  /* Tiles in a row (stat tiles, presets) follow one another too. */
+  .page-enter .grid > .shadow-card { animation: rise-in var(--motion-slow) var(--ease-out) both; }
+  .page-enter .grid > .shadow-card:nth-child(2) { animation-delay: 60ms; }
+  .page-enter .grid > .shadow-card:nth-child(3) { animation-delay: 120ms; }
+  .page-enter .grid > .shadow-card:nth-child(4) { animation-delay: 180ms; }
+  .page-enter .grid > .shadow-card:nth-child(n+5) { animation-delay: 240ms; }
+
+  /* Something opens in place: a tab's content, an expanded row, a notice. */
+  .reveal { animation: drop-in var(--motion) var(--ease-out) both; }
+  details[open] > :not(summary) { animation: drop-in var(--motion) var(--ease-out) both; }
+
+  /* Chat: the question lands, then the answer. */
+  .bubble-in { animation: bubble-in var(--motion) var(--ease-out) both; }
+  .bubble-in-late { animation: bubble-in var(--motion) var(--ease-out) 90ms both; }
+
+  /* Meters fill from the left when they appear. */
+  .meter-fill { transform-origin: left center; animation: grow-x var(--motion-slow) var(--ease-out) both; }
+  .archive-explorer .aj-mix { transform-origin: left center; animation: grow-x var(--motion-slow) var(--ease-out) 120ms both; }
+
+  /* The mobile menu slides in over a fading backdrop. */
+  .drawer-backdrop { animation: fade-in var(--motion) ease both; }
+  .drawer-panel { animation: slide-in-left var(--motion) var(--ease-out) both; }
+
+  /* A notification count pops when it changes. */
+  .badge-pop { animation: badge-pop var(--motion) var(--ease-out) both; }
+
+  /* Clickable tiles lift a little under the pointer. */
+  button.shadow-card { transition: transform var(--motion-fast) var(--ease-out), background-color var(--motion-fast) ease, border-color var(--motion-fast) ease; }
+  button.shadow-card:hover { transform: translateY(-2px); }
+}

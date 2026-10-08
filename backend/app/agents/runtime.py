@@ -232,6 +232,18 @@ class AgentRuntime:
 
     def retrieve(self, state: AgentState) -> AgentState:
         agent = state["agent"]
+        needs_context = getattr(self.brain, "needs_context", None)
+        if needs_context is not None and not needs_context(state["safe_message"]):
+            return {
+                "trace": self._trace(
+                    state,
+                    TraceEntry(
+                        stage="retrieval",
+                        status="skipped",
+                        detail="Small talk: no knowledge-base search needed.",
+                    ),
+                )
+            }
         policy = get_policy(agent)
         if policy is None or not PolicyEngine(policy).can_use_tool("search_documents").allowed:
             return {
