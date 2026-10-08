@@ -1,5 +1,6 @@
 import {
   Binary,
+  Boxes,
   Check,
   ClipboardPaste,
   Copy,
@@ -23,6 +24,7 @@ import { Fragment, useRef, useState, type DragEvent, type FormEvent } from "reac
 
 import { api, upload } from "../api";
 import { isStaff, useAuth } from "../auth";
+import { Landscape } from "../components/Landscape";
 import { PipelineFlow, type Stage } from "../components/pipeline";
 import {
   Badge,
@@ -72,7 +74,7 @@ const STAGE_LABEL: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
-type Tab = "add" | "documents" | "search" | "quarantine" | "sources";
+type Tab = "landscape" | "add" | "documents" | "search" | "quarantine" | "sources";
 
 function TrustSelect({ value, onChange }: { value: TrustLevel; onChange: (v: TrustLevel) => void }) {
   return (
@@ -455,7 +457,7 @@ export default function KnowledgeBase() {
   const { user } = useAuth();
   const admin = user?.role === "ADMIN";
   const staff = isStaff(user);
-  const [tab, setTab] = useState<Tab>(admin ? "add" : "search");
+  const [tab, setTab] = useState<Tab>(staff ? "landscape" : "search");
 
   const jobs = useApi<IngestJob[]>(staff ? "/api/retrieval/jobs" : null, 1000);
   const anyRunning = (jobs.data ?? []).some((j) => !["COMPLETED", "FAILED", "CANCELLED"].includes(j.stage));
@@ -558,6 +560,7 @@ export default function KnowledgeBase() {
   ];
 
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
+    ...(staff ? [{ id: "landscape" as const, label: "Landscape", icon: Boxes }] : []),
     ...(admin ? [{ id: "add" as const, label: "Add data", icon: UploadCloud }] : []),
     ...(staff ? [{ id: "documents" as const, label: "Documents", icon: Layers, count: documents.data?.length }] : []),
     { id: "search", label: "Test search", icon: Search },
@@ -574,22 +577,34 @@ export default function KnowledgeBase() {
         description="Add documents to the agents' knowledge base and watch them move through the pipeline. Every chunk is scanned by the prompt-injection firewall before it can be indexed — poisoned paragraphs are quarantined, suspicious ones sanitized."
       />
 
-      <Card
-        title="Ingestion pipeline"
-        subtitle={
-          runningJob
-            ? `Processing ${runningJob.filename} — ${STAGE_LABEL[runningJob.stage].toLowerCase()}…`
-            : "Live totals for everything in the knowledge base"
-        }
-        icon={Layers}
-        className="mb-6"
-      >
-        <PipelineFlow stages={stages} />
-      </Card>
+      {tab !== "landscape" && (
+        <Card
+          title="Ingestion pipeline"
+          subtitle={
+            runningJob
+              ? `Processing ${runningJob.filename} — ${STAGE_LABEL[runningJob.stage].toLowerCase()}…`
+              : "Live totals for everything in the knowledge base"
+          }
+          icon={Layers}
+          className="mb-6"
+        >
+          <PipelineFlow stages={stages} />
+        </Card>
+      )}
 
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       <div className="pt-6">
         <ErrorNote message={error} />
+
+        {tab === "landscape" && staff && (
+          <Landscape
+            documents={documents.data ?? []}
+            stats={stats.data ?? undefined}
+            selectedId={openDoc}
+            onSelect={(id) => setOpenDoc(openDoc === id ? null : id)}
+            chunks={chunks.data ?? undefined}
+          />
+        )}
 
         {tab === "add" && admin && (
           <div className="space-y-6">

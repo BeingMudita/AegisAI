@@ -1,4 +1,9 @@
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/cinzel";
+@import "@fontsource/playfair-display/400.css";
+@import "@fontsource/playfair-display/500.css";
+@import "@fontsource/playfair-display/600.css";
+@import "@fontsource/playfair-display/700.css";
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
@@ -8,79 +13,35 @@
    blue ↔ red (validated for CVD — green ↔ red fails); status colors are
    reserved for state and always ship with an icon + label.
 --------------------------------------------------------------------------- */
+/* Single light, airy theme — sage/forest green, soft greys, lots of white.
+   No light/dark toggle: the palette is fixed everywhere. */
 :root {
   color-scheme: light;
-  --page: #f6f7f9;
+  --page: #f3f6f1;
   --surface: #ffffff;
-  --surface-2: #f1f4f5;
-  --ink: #192b32;
-  --ink-2: #53656d;
-  --muted: #677981;
-  --grid: #e5e7ec;
-  --axis: #c9ccd4;
-  --border: rgba(15, 23, 42, 0.09);
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
-  --series-1: #147d79;
-  --series-1-track: #cce8e3;
-  --brand: #147d79;
-  --brand-2: #147d79;
-  --good: #278361;
-  --warning: #aa7416;
-  --serious: #ec835a;
-  --critical: #d03b3b;
+  --surface-2: #eef2ea;
+  --ink: #273029;
+  --ink-2: #566056;
+  --muted: #8b948a;
+  --grid: #e5eae1;
+  --axis: #cdd5c9;
+  --border: rgba(39, 48, 41, 0.1);
+  --shadow: 0 1px 2px rgba(39, 48, 41, 0.05);
+  --series-1: #5c8a63;
+  --series-1-track: #d8e6d6;
+  --brand: #43714c;
+  --brand-2: #87a085;
+  --good: #3f8a5a;
+  --warning: #9c7320;
+  --serious: #bf5f33;
+  --critical: #c23b33;
   --nav-bg: #ffffff;
-  --nav-ink: #233a42;
-  --nav-ink-2: #667b84;
-  --nav-hover: #f1f5f5;
-  --nav-active: #e8f3f0;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --page: #0b0d12;
-    --surface: #151821;
-    --surface-2: #1d212c;
-    --ink: #f1f5f9;
-    --ink-2: #b4bccb;
-    --muted: #7d8595;
-    --grid: #262b37;
-    --axis: #363c4a;
-    --border: rgba(255, 255, 255, 0.08);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --series-1: #3987e5;
-    --series-1-track: #184f95;
-    --brand: #3987e5;
-    --brand-2: #9085e9;
-    --nav-bg: #080b12;
-    --nav-ink: #e2e8f0;
-    --nav-ink-2: #9eafba;
-    --nav-hover: #1d2530;
-    --nav-active: #183a3c;
-  }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --page: #0b0d12;
-  --surface: #151821;
-  --surface-2: #1d212c;
-  --ink: #f1f5f9;
-  --ink-2: #b4bccb;
-  --muted: #7d8595;
-  --grid: #262b37;
-  --axis: #363c4a;
-  --border: rgba(255, 255, 255, 0.08);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --series-1: #3987e5;
-  --series-1-track: #184f95;
-  --brand: #3987e5;
-  --brand-2: #9085e9;
-  --nav-bg: #080b12;
-  --nav-ink: #e2e8f0;
-  --nav-ink-2: #9eafba;
-  --nav-hover: #1d2530;
-  --nav-active: #183a3c;
+  --nav-ink: #2b342c;
+  --nav-ink-2: #6b756a;
+  --nav-hover: #eef2ea;
+  --nav-active: #e2efe0;
+  --plexus: 92, 114, 96;
+  --glow: 124, 166, 132;
 }
 
 @theme inline {
@@ -103,14 +64,48 @@
   --color-nav-ink-2: var(--nav-ink-2);
   --shadow-card: var(--shadow);
   --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Cinzel Variable", "Playfair Display", Georgia, serif;
+  --font-heading: "Playfair Display", Georgia, "Times New Roman", serif;
 }
 
-html,
+/* The base layer. A soft radial glow is folded into the page color so the app
+   never reads as a flat block, in either theme; it always paints furthest back.
+   The animated plexus (components/Backdrop) sits above it, and .app-shell above
+   that — see the z-index ladder below. */
+html {
+  background:
+    radial-gradient(1200px 700px at 86% -12%, rgba(var(--glow), 0.22), transparent 62%),
+    radial-gradient(1000px 640px at -8% 112%, rgba(135, 160, 133, 0.16), transparent 58%),
+    var(--page);
+  background-attachment: fixed;
+}
+
 body {
-  background: var(--page);
+  background: transparent;
   color: var(--ink);
   font-family: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+#backdrop-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.app-shell {
+  position: relative;
+  z-index: 1;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+.font-heading {
+  font-family: var(--font-heading);
+  letter-spacing: 0;
 }
 
 .tabular {
@@ -118,7 +113,7 @@ body {
 }
 
 .brand-gradient {
-  background: var(--brand);
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
 }
 
 /* Recharts focus outline on click is noise; keyboard focus still shows. */
@@ -178,13 +173,17 @@ button:not(:disabled), summary { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 main:focus { outline: none; }
 ::selection { background: var(--series-1-track); color: var(--ink); }
-.eyebrow { font-size: 10px; font-weight: 650; letter-spacing: .12em; color: var(--ink-2); text-transform: uppercase; }
+.eyebrow { font-family: var(--font-display); font-size: 10px; font-weight: 600; letter-spacing: .28em; color: var(--brand); text-transform: uppercase; }
 .skip-link { position: fixed; top: -100px; left: 1rem; z-index: 100; padding: .8rem; background: var(--surface); border: 2px solid var(--brand); border-radius: 6px; }
 .skip-link:focus { top: 1rem; }
 .workspace-nav > div:first-child { padding-top: 28px; padding-bottom: 32px; }
 .workspace-nav button { min-height: 38px; }
-.workspace-intro { display: grid; grid-template-columns: 1.6fr 1fr; gap: 32px; padding: 36px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
-.workspace-intro h2 { margin-top: 16px; font-size: clamp(24px, 2.5vw, 36px); line-height: 1.22; letter-spacing: -.045em; font-weight: 600; }
+.workspace-intro { position: relative; overflow: hidden; display: grid; grid-template-columns: 1.6fr 1fr; gap: 32px; padding: 36px; background:
+    linear-gradient(135deg, color-mix(in srgb, var(--brand) 9%, var(--surface)), var(--surface) 62%);
+  border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
+.workspace-intro::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(520px 320px at 100% 0%, rgba(var(--glow), 0.18), transparent 70%); }
+.workspace-intro > * { position: relative; z-index: 1; }
+.workspace-intro h2 { font-family: var(--font-display); margin-top: 16px; font-size: clamp(22px, 2.3vw, 34px); line-height: 1.24; letter-spacing: -.01em; font-weight: 600; }
 .workspace-intro p { margin-top: 16px; font-size: 13px; color: var(--ink-2); max-width: 480px; line-height: 1.75; }
 .primary-link { display: inline-flex; align-items: center; justify-content: center; gap: 16px; margin-top: 24px; padding: 11px 16px; background: var(--brand); color: white; border-radius: 6px; font-size: 12px; font-weight: 600; }
 .primary-link:hover { filter: brightness(1.1); }
@@ -227,8 +226,11 @@ main:focus { outline: none; }
 .process-step.running::before { background: var(--brand); animation: process-pulse 1.2s ease-in-out infinite; }
 .process-step.stopped .process-icon { border-color: var(--critical); color: var(--critical); }
 .auth-shell { display: grid; min-height: 100vh; grid-template-columns: 1.1fr 1fr; background: var(--surface); }
-.auth-story { display: flex; flex-direction: column; justify-content: space-between; background: #183e43; color: #eef6f5; padding: clamp(32px, 5vw, 80px); }
-.auth-story h1 { max-width: 540px; font-size: clamp(36px, 4vw, 60px); line-height: 1.12; font-weight: 500; letter-spacing: -.05em; margin: 48px 0 24px; }
+.auth-story { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; background:
+    radial-gradient(900px 600px at 85% -10%, rgba(190, 216, 178, 0.22), transparent 60%),
+    linear-gradient(155deg, #3c5d42, #223a29 74%); color: #eef3ea; padding: clamp(32px, 5vw, 80px); }
+.auth-story > * { position: relative; z-index: 1; }
+.auth-story h1 { font-family: var(--font-display); max-width: 560px; font-size: clamp(28px, 3.2vw, 46px); line-height: 1.22; font-weight: 600; letter-spacing: .01em; margin: 48px 0 24px; }
 .auth-story > div > p { max-width: 420px; line-height: 1.8; color: #c0d3d3; font-size: 14px; }
 .auth-features { margin: 40px 0; border-top: 1px solid #ffffff26; }
 .auth-features li { display: flex; align-items: center; gap: 16px; padding: 18px 0; border-bottom: 1px solid #ffffff26; font-size: 13px; }

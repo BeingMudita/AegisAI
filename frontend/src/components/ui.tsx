@@ -171,7 +171,7 @@ export function Card({
           <div className="flex min-w-0 items-start gap-3">
             {icon && <IconTile icon={icon} size="sm" />}
             <div className="min-w-0">
-              {title && <h2 className="text-[15px] font-semibold text-ink">{title}</h2>}
+              {title && <h2 className="font-heading text-[16px] font-semibold text-ink">{title}</h2>}
               {subtitle && <p className="mt-0.5 text-xs leading-relaxed text-ink-2">{subtitle}</p>}
             </div>
           </div>
@@ -201,7 +201,7 @@ export function StatTile({
       {icon && <IconTile icon={icon} tone={tone} />}
       <div className="min-w-0">
         <div className="text-xs font-medium text-ink-2">{label}</div>
-        <div className="mt-0.5 text-2xl font-semibold tracking-tight text-ink">{value}</div>
+        <div className="font-heading tabular mt-0.5 text-[26px] font-semibold tracking-tight text-ink">{value}</div>
         {note && <div className="mt-1 text-xs leading-relaxed text-muted">{note}</div>}
       </div>
     </div>
@@ -217,12 +217,17 @@ export function PageHeader({
   description: ReactNode;
   actions?: ReactNode;
 }) {
+  // The description is intentionally not shown under the title; it surfaces on
+  // hover of the title instead, keeping each page clean below its heading.
+  const hint = typeof description === "string" ? description : undefined;
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div className="max-w-3xl">
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">{title}</h1>
-        <p className="mt-1 text-sm leading-relaxed text-ink-2">{description}</p>
-      </div>
+      <h1
+        title={hint}
+        className="font-display cursor-default text-[26px] font-semibold tracking-wide text-ink"
+      >
+        {title}
+      </h1>
       {actions}
     </div>
   );

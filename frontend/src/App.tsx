@@ -8,16 +8,12 @@ import {
   GitBranch,
   LogOut,
   Menu,
-  Monitor,
-  Moon,
   Network,
   Radar,
   ScanLine,
   ScrollText,
   ShieldAlert,
   ShieldCheck,
-  Sun,
-  UserCheck,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
@@ -37,7 +33,6 @@ const Policies = lazy(() => import("./pages/Policies"));
 const Trust = lazy(() => import("./pages/Trust"));
 const Architecture = lazy(() => import("./pages/Architecture"));
 const Sessions = lazy(() => import("./pages/Sessions"));
-const Approvals = lazy(() => import("./pages/Approvals"));
 const RedTeam = lazy(() => import("./pages/RedTeam"));
 const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
 const AttackReplay = lazy(() => import("./pages/AttackReplay"));
@@ -103,14 +98,6 @@ const ROUTES: Route[] = [
     render: () => <AgentConsole />,
   },
   {
-    id: "approvals",
-    label: "Approvals",
-    group: "Operate",
-    icon: UserCheck,
-    staffOnly: true,
-    render: () => <Approvals />,
-  },
-  {
     id: "scanner",
     label: "Security scanner",
     group: "Assure",
@@ -168,32 +155,6 @@ function useHashRoute(): [string, (id: string) => void] {
   return [route, (id) => (window.location.hash = `/${id}`)];
 }
 
-type Theme = "light" | "dark" | "system";
-const THEME_ORDER: Theme[] = ["system", "light", "dark"];
-const THEME_ICON = { system: Monitor, light: Sun, dark: Moon };
-
-function useTheme(): [Theme, (t: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const stored = localStorage.getItem("aegisai.theme");
-      return THEME_ORDER.includes(stored as Theme) ? stored as Theme : "light";
-    } catch {
-      return "light";
-    }
-  });
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "system") root.removeAttribute("data-theme");
-    else root.setAttribute("data-theme", theme);
-    try {
-      localStorage.setItem("aegisai.theme", theme);
-    } catch {
-      /* preference just won't persist */
-    }
-  }, [theme]);
-  return [theme, setTheme];
-}
-
 function initials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
@@ -202,13 +163,10 @@ export default function App() {
   const { user, ready, logout } = useAuth();
   const staff = isStaff(user);
   const [route, go] = useHashRoute();
-  const [theme, setTheme] = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
   const drawer = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const runtime = useApi<{ brain: string }>(user ? "/api/agents/runtime" : null);
-  const approvals = useApi<{ pending: unknown[] }>(isStaff(user) ? "/api/approvals" : null, 5000);
-  const pendingApprovals = approvals.data?.pending.length ?? 0;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -238,8 +196,6 @@ export default function App() {
 
   const routes = ROUTES.filter((r) => staff || !r.staffOnly);
   const current = routes.find((r) => r.id === route) ?? routes[0];
-  const ThemeIcon = THEME_ICON[theme];
-  const nextTheme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
   const role = user.role.replace("_", " ").toLowerCase();
 
   const nav = (
@@ -247,7 +203,7 @@ export default function App() {
       <div className="flex items-center gap-3 px-5 py-5">
         <Logo />
         <div>
-          <div className="text-[17px] font-semibold tracking-tight text-nav-ink">AegisAI<span className="ml-2 rounded border border-edge px-1 py-0.5 text-[9px] font-medium tracking-wide text-nav-ink-2">CONSOLE</span></div>
+          <div className="font-display text-[16px] font-bold tracking-wide text-nav-ink">AEGIS<span className="text-accent">AI</span><span className="ml-2 rounded border border-edge px-1 py-0.5 text-[8px] font-medium tracking-[0.18em] text-nav-ink-2">CONSOLE</span></div>
           <div className="mt-1 text-[11px] text-nav-ink-2">Agent security workspace</div>
         </div>
       </div>
@@ -281,15 +237,6 @@ export default function App() {
                       className={`h-[18px] w-[18px] ${active ? "text-accent" : "text-nav-ink-2 group-hover:text-nav-ink"}`}
                     />
                     {r.label}
-                    {r.id === "approvals" && pendingApprovals > 0 && (
-                      <span
-                        className="ml-auto rounded-full px-1.5 text-[11px] font-semibold text-white"
-                        style={{ background: "var(--warning)" }}
-                        aria-label={`${pendingApprovals} waiting`}
-                      >
-                        {pendingApprovals}
-                      </span>
-                    )}
                   </button>
                 );
               })}
@@ -366,14 +313,6 @@ export default function App() {
                   {runtime.data.brain === "rule_based" ? "Rule-based planner" : runtime.data.brain}
                 </span>
               )}
-              <button
-                onClick={() => setTheme(nextTheme)}
-                className="rounded-lg p-2 text-ink-2 hover:bg-surface-2 hover:text-ink"
-                title={`Theme: ${theme} (click for ${nextTheme})`}
-                aria-label={`Theme: ${theme}`}
-              >
-                <ThemeIcon className="h-[18px] w-[18px]" />
-              </button>
               <div className="hidden items-center gap-2 border-l border-edge pl-3 sm:flex">
                 <span className="brand-gradient flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white">
                   {initials(user.username)}
