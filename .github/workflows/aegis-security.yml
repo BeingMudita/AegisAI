@@ -19,7 +19,9 @@ jobs:
       - name: AegisAI security gate
         uses: ./.github/actions/aegis-security
         with:
-          target: FinanceAgent # an agent name, an aegis.yaml, or a source directory
+          target: aegis.yaml # the agent's policy file in the repo (defines FinanceAgent).
+          # NB: a bare agent name only resolves against a running, seeded system;
+          # in CI (in-memory, no seed) point the gate at the policy file instead.
           threshold: "90"
           redteam: "true"
           aegis-path: backend
