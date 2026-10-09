@@ -5,3 +5,13 @@
 #
 #   # not reachable: we never parse untrusted TIFFs; revisit 2027-01-01
 #   CVE-2026-00000
+
+# Build-time packaging tooling baked into the python:3.11-slim base image
+# (setuptools-vendored jaraco.context and the standalone wheel). They are not
+# runtime dependencies of the service — the container runs only uvicorn — so
+# neither the malicious-tar (jaraco.context) nor malicious-wheel (wheel) code
+# path is reachable. The project's own dependencies and the Debian OS packages
+# both scan clean; upgrading the base tooling only trades these for newer
+# advisories. No fixed base image available yet; revisit 2027-01-09.
+CVE-2026-23949
+CVE-2026-24049
