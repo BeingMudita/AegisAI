@@ -43,14 +43,14 @@ class Settings(BaseSettings):
         default="development",
         validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"),
     )
-    debug: bool = True
+    debug: bool = False  # tracebacks in error responses; enable only for local debugging
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173"
 
     # Database
-    database_url: str = "postgresql+asyncpg://aegis:aegis@localhost:5432/aegisai"
+    database_url: str = "postgresql://aegis:aegis@localhost:5432/aegisai"
     # "memory" keeps operational state in-process (development, tests).
     # "postgres" persists events, trust, sessions, tool requests, users, policies
     # and the knowledge base in DATABASE_URL, so several API workers share state.
@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # A turn's session lock expires after this, so a crashed worker can't hold a
     # session forever.
     session_lease_seconds: int = 300
+    # A session with no turn for this long expires and refuses further messages.
+    session_idle_minutes: int = 720  # 0 = never
+
+    # Retention (0 = keep forever). A sweeper deletes what is older, once every
+    # RETENTION_INTERVAL_MINUTES, on one worker at a time.
+    audit_retention_days: int = 90  # security events
+    session_retention_days: int = 30  # ended sessions, with their turns
+    usage_retention_days: int = 90  # daily budget counters
+    retention_interval_minutes: int = 60  # 0 = no background sweeper
 
     # Security
     jwt_secret: str = Field(
@@ -84,14 +93,20 @@ class Settings(BaseSettings):
     # auto = use Ollama when reachable, else the deterministic rule-based planner
     llm_backend: str = "auto"  # auto | ollama | rule_based
     agent_max_steps: int = 3
+    # Wall-clock budget for one agent turn (seconds). Once it is spent the brain stops
+    # calling the LLM and finishes with the deterministic planner, so a turn never
+    # outlives the proxy in front of the API (nginx waits 200 s).
+    agent_turn_timeout: float = 150.0
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     # auto = sentence-transformers when installed, else a dependency-free hashing embedder
     embedding_backend: str = "auto"  # auto | sentence_transformers | hashing
 
     # RAG
-    rag_chunk_size: int = 512
-    rag_chunk_overlap: int = 64
+    # Words per chunk. all-MiniLM-L6-v2 reads at most 256 word-pieces (~190 words) and
+    # silently drops the rest, so longer chunks would be only partly embedded.
+    rag_chunk_size: int = 180
+    rag_chunk_overlap: int = 30
     rag_top_k: int = 5
     rag_seed_corpus: bool = True  # ingest app/rag/seed/ on first use
 
@@ -106,7 +121,12 @@ class Settings(BaseSettings):
     trust_threshold: float = 0.6
     firewall_block_threshold: float = 0.8
     firewall_flag_threshold: float = 0.4
+    # Semantic layer (Phase 12): a learned classifier for paraphrased attacks the
+    # rules miss. It can raise ALLOW to FLAG, never to BLOCK.
+    firewall_semantic: bool = True
     policy_config_path: str = "app/policies/default_policies.yaml"
+    # Postgres mode: how long a policy read from the database is reused (seconds).
+    policy_cache_seconds: float = 5.0
 
     # Red-team suites (firewall_cases.yaml, agent_scenarios.yaml); default: ../attack-scenarios
     redteam_suites_dir: str | None = None
@@ -124,6 +144,12 @@ class Settings(BaseSettings):
     # Where `aegis inspect` points the browser.
     dashboard_url: str = "http://localhost:5173"
 
+    # Supply chain: a model is used only if it matches its pin in the model manifest.
+    # enforce = refuse an unpinned or altered model; warn = use it but record an
+    # ANOMALY event; off = no checks. Relative paths resolve against backend/.
+    model_provenance: str = "enforce"  # enforce | warn | off
+    model_manifest_path: str = "model-manifest.yaml"
+
     # Telemetry
     audit_buffer_size: int = 5000
 
@@ -135,6 +161,11 @@ class Settings(BaseSettings):
         path = base.joinpath(*parts)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def backend_path(self, path: str) -> Path:
+        """``path`` as given if absolute, else resolved against backend/."""
+        p = Path(path)
+        return p if p.is_absolute() else _BACKEND_ROOT / p
 
     @property
     def use_postgres(self) -> bool:

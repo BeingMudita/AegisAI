@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,7 +27,7 @@ from app.agents.schemas import (
     SessionSummary,
     TraceEntry,
 )
-from app.agents.sessions import SessionStore
+from app.agents.sessions import SessionStore, expired_message, idle_cutoff
 from app.config import get_settings
 from app.database.enums import SessionStatus
 from app.database.models import Agent, AgentSession, AgentTurnRow, SessionRun, User
@@ -64,7 +64,7 @@ def _progress(run: SessionRun) -> RunProgress:
 
 def _agent_id(db: Session, name: str) -> uuid.UUID:
     db.execute(insert(Agent).values(id=uuid.uuid4(), name=name).on_conflict_do_nothing())
-    return db.scalar(select(Agent.id).where(Agent.name == name))
+    return db.execute(select(Agent.id).where(Agent.name == name)).scalar_one()
 
 
 class PostgresSessionStore(SessionStore):
@@ -80,35 +80,60 @@ class PostgresSessionStore(SessionStore):
                     status=record.status,
                     meta={"owner": owner},
                     started_at=record.created_at,
+                    last_activity_at=record.created_at,
                 )
             )
         return record
+
+    @staticmethod
+    def _head(db: Session, sid: uuid.UUID) -> AgentSessionRecord | None:
+        hit = db.execute(
+            select(AgentSession, Agent.name)
+            .join(Agent, Agent.id == AgentSession.agent_id)
+            .where(AgentSession.id == sid)
+        ).first()
+        if hit is None:
+            return None
+        row, agent = hit
+        return AgentSessionRecord(
+            id=str(row.id),
+            agent=agent or "",
+            owner=(row.meta or {}).get("owner", ""),
+            status=row.status,
+            created_at=row.started_at,
+            ended_at=row.ended_at,
+        )
+
+    def head(self, session_id: str) -> AgentSessionRecord | None:
+        sid = _uuid(session_id)
+        if sid is None:
+            return None
+        with transaction() as db:
+            return self._head(db, sid)
 
     def get(self, session_id: str) -> AgentSessionRecord | None:
         sid = _uuid(session_id)
         if sid is None:
             return None
         with transaction() as db:
-            row = db.get(AgentSession, sid)
-            if row is None:
+            record = self._head(db, sid)
+            if record is None:
                 return None
             turns = db.scalars(
                 select(AgentTurnRow.payload)
                 .where(AgentTurnRow.session_id == sid)
                 .order_by(AgentTurnRow.created_at)
             ).all()
-            agent = db.scalar(select(Agent.name).where(Agent.id == row.agent_id))
-            return AgentSessionRecord(
-                id=str(row.id),
-                agent=agent or "",
-                owner=(row.meta or {}).get("owner", ""),
-                status=row.status,
-                created_at=row.started_at,
-                ended_at=row.ended_at,
-                turns=[AgentTurn.model_validate(t) for t in turns],
-            )
+            record.turns = [AgentTurn.model_validate(t) for t in turns]
+            return record
 
-    def list(self, owner: str | None = None) -> list[SessionSummary]:
+    def list(
+        self,
+        owner: str | None = None,
+        *,
+        limit: int | None = None,
+        before: tuple[datetime, str] | None = None,
+    ) -> list[SessionSummary]:
         counts = (
             select(
                 AgentTurnRow.session_id,
@@ -122,10 +147,17 @@ class PostgresSessionStore(SessionStore):
             select(AgentSession, Agent.name, counts.c.turns, counts.c.blocked)
             .join(Agent, Agent.id == AgentSession.agent_id)
             .outerjoin(counts, counts.c.session_id == AgentSession.id)
-            .order_by(AgentSession.started_at.desc())
+            .order_by(AgentSession.started_at.desc(), AgentSession.id.desc())
         )
         if owner is not None:
             query = query.where(AgentSession.meta["owner"].astext == owner)
+        if before is not None:
+            key = _uuid(before[1])
+            if key is None:
+                return []
+            query = query.where(tuple_(AgentSession.started_at, AgentSession.id) < (before[0], key))
+        if limit is not None:
+            query = query.limit(limit)
         with transaction() as db:
             return [
                 SessionSummary(
@@ -140,10 +172,6 @@ class PostgresSessionStore(SessionStore):
                 )
                 for row, agent, turns, blocked in db.execute(query)
             ]
-
-    def add_turn(self, session_id: str, turn: AgentTurn) -> None:
-        with transaction() as db:
-            self._insert_turn(db, uuid.UUID(session_id), turn, None)
 
     @staticmethod
     def _insert_turn(db: Session, sid: uuid.UUID, turn: AgentTurn, request_id: str | None) -> None:
@@ -194,28 +222,40 @@ class PostgresSessionStore(SessionStore):
 
     def begin_turn(self, session_id: str, request_id: str) -> None:
         sid = uuid.UUID(session_id)
+        refusal: str | None = None
         try:
             with transaction() as db:
                 session = db.get(AgentSession, sid, with_for_update=True)
                 if session is None:
                     raise KeyError(session_id)
-                if session.status != SessionStatus.ACTIVE:
-                    raise ValueError("Session is closed.")
-                if self._running(db, sid) is not None:
+                cutoff = idle_cutoff()
+                last = session.last_activity_at or session.started_at
+                if session.status == SessionStatus.ACTIVE and cutoff and last < cutoff:
+                    # Recorded as a refusal (not raised) so the expiry is committed.
+                    session.status = SessionStatus.EXPIRED
+                    session.ended_at = _now()
+                if session.status == SessionStatus.EXPIRED:
+                    refusal = expired_message()
+                elif session.status != SessionStatus.ACTIVE:
+                    refusal = "Session is closed."
+                elif self._running(db, sid) is not None:
                     raise ValueError("A turn is already running in this session.")
-                db.add(
-                    SessionRun(
-                        session_id=sid,
-                        request_id=request_id,
-                        status="running",
-                        stages=[],
-                        started_at=_now(),
-                        lease_expires_at=_lease(),
+                else:
+                    db.add(
+                        SessionRun(
+                            session_id=sid,
+                            request_id=request_id,
+                            status="running",
+                            stages=[],
+                            started_at=_now(),
+                            lease_expires_at=_lease(),
+                        )
                     )
-                )
-                db.flush()
+                    db.flush()
         except IntegrityError as exc:
             raise ValueError(_ALREADY_ATTEMPTED) from exc
+        if refusal is not None:
+            raise ValueError(refusal)
 
     def report_progress(self, session_id: str, entry: TraceEntry) -> None:
         sid = uuid.UUID(session_id)
@@ -246,6 +286,11 @@ class PostgresSessionStore(SessionStore):
             ).first()
             if turn is not None:
                 self._insert_turn(db, sid, turn, run.request_id if run else None)
+                db.execute(
+                    update(AgentSession)
+                    .where(AgentSession.id == sid)
+                    .values(last_activity_at=turn.created_at)
+                )
             if run is None:
                 return
             run.status = "failed" if turn is None else "blocked" if turn.blocked else "completed"
@@ -269,6 +314,34 @@ class PostgresSessionStore(SessionStore):
                 .limit(1)
             ).first()
             return _progress(run) if run else None
+
+    # ------------------------------------------------------------ retention
+    def expire_idle(self, cutoff: datetime) -> int:
+        now = _now()
+        live_run = exists().where(
+            (SessionRun.session_id == AgentSession.id)
+            & (SessionRun.status == "running")
+            & (SessionRun.lease_expires_at > now)
+        )
+        stmt = (
+            update(AgentSession)
+            .where(
+                (AgentSession.status == SessionStatus.ACTIVE)
+                & (func.coalesce(AgentSession.last_activity_at, AgentSession.started_at) < cutoff)
+                & ~live_run
+            )
+            .values(status=SessionStatus.EXPIRED, ended_at=now)
+        )
+        with transaction() as db:
+            return int(db.execute(stmt).rowcount or 0)  # type: ignore[attr-defined]
+
+    def purge_ended_before(self, cutoff: datetime) -> int:
+        """Delete ended sessions; their runs and turns go with them (ON DELETE CASCADE)."""
+        stmt = delete(AgentSession).where(
+            (AgentSession.status != SessionStatus.ACTIVE) & (AgentSession.ended_at < cutoff)
+        )
+        with transaction() as db:
+            return int(db.execute(stmt).rowcount or 0)  # type: ignore[attr-defined]
 
     def clear(self) -> None:
         with transaction() as db:

@@ -13,7 +13,7 @@ import hashlib
 import math
 import re
 from functools import lru_cache
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -80,11 +80,15 @@ class SentenceTransformerEmbedder:
         self.dim = dim
         self._model = None
 
-    def _load(self):  # type: ignore[no-untyped-def]
+    def _load(self) -> Any:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.name)
+            from app.supply_chain.provenance import verified_huggingface_path
+
+            # Loaded from the snapshot whose files were just checked against their
+            # pins (raises ProvenanceError under MODEL_PROVENANCE=enforce).
+            self._model = SentenceTransformer(verified_huggingface_path(self.name))
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

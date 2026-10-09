@@ -1,4 +1,8 @@
-"""Red-team run history in ``redteam_runs`` (the full report as JSON)."""
+"""Red-team run history in ``redteam_runs`` (the full report as JSON).
+
+Like the in-memory store, only the newest ``keep`` runs are kept: older ones are
+deleted whenever a run finishes.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,9 @@ from app.redteam.schemas import RedTeamRun
 
 
 class PostgresRunStore:
+    def __init__(self, keep: int = 25) -> None:
+        self.keep = keep
+
     def save(self, run: RedTeamRun) -> None:
         values = {
             "status": run.status,
@@ -21,6 +28,13 @@ class PostgresRunStore:
         stmt = stmt.on_conflict_do_update(index_elements=[RedTeamRunRow.id], set_=values)
         with transaction() as db:
             db.execute(stmt)
+            if run.status != "running":
+                newest = (
+                    select(RedTeamRunRow.id)
+                    .order_by(RedTeamRunRow.started_at.desc())
+                    .limit(self.keep)
+                )
+                db.execute(delete(RedTeamRunRow).where(RedTeamRunRow.id.not_in(newest)))
 
     def get(self, run_id: str) -> RedTeamRun | None:
         with transaction() as db:

@@ -4,7 +4,6 @@ import { downloadJson } from "../download";
 
 import { api, qs } from "../api";
 import { useAuth } from "../auth";
-import { ShieldCheck } from "lucide-react";
 import { Badge, Button, Card, Empty, ErrorNote, PageHeader, inputClass, severityTone } from "../components/ui";
 import { formatTime, useApi } from "../hooks";
 import type { SecurityEvent } from "../types";
@@ -125,11 +124,7 @@ export default function Events() {
             </table>
           </div>
         ) : (
-          <Empty icon={ShieldCheck}>
-            {eventType || severity || agent
-              ? "No events match these filters. Clear them to see the full audit log."
-              : "No security events recorded yet. Run a guarded request in the Agent workspace, or launch the Red-team lab — every blocked injection, denied tool call and trust drop lands here."}
-          </Empty>
+          <Empty>No events match.</Empty>
         )}
       </Card>
     </div>

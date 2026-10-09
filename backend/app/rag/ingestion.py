@@ -9,7 +9,8 @@ Files arrive two ways:
 
 Each file becomes an :class:`IngestJob` processed by a single worker thread
 (one file at a time keeps memory flat), streaming through the knowledge base
-pipeline while the job records live progress for the UI.
+pipeline while the job records live progress for the UI. A file whose content is
+already indexed (same SHA-256) completes at once, pointing at the existing document.
 """
 
 from __future__ import annotations
@@ -25,8 +26,9 @@ import structlog
 
 from app.config import get_settings
 from app.database.enums import SourceType, TrustLevel
-from app.rag.knowledge_base import IngestCancelled, KnowledgeBase, get_knowledge_base
+from app.rag.knowledge_base import IngestCancelled, KnowledgeBase, file_hash, get_knowledge_base
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported, iter_blocks
+from app.rag.paths import archive_location, file_source
 from app.rag.schemas import InboxFile, InboxListing, IngestJob, IngestReport, IngestStage
 
 logger = structlog.get_logger("aegisai.ingestion")
@@ -43,7 +45,8 @@ class IngestionManager:
         self.inbox_dir = inbox_dir
         self.upload_dir = upload_dir
         self._jobs: OrderedDict[str, IngestJob] = OrderedDict()
-        self._paths: dict[str, tuple[Path, bool]] = {}  # job id → (file, delete when done)
+        # job id → (file, delete when done, content hash if already known)
+        self._paths: dict[str, tuple[Path, bool, str | None]] = {}
         self._cancelled: set[str] = set()
         self._queue: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
@@ -60,6 +63,9 @@ class IngestionManager:
         origin: str,
         delete_after: bool = False,
         filename: str | None = None,
+        content_hash: str | None = None,
+        section: str = "Unsorted",
+        folder: str = "General",
     ) -> IngestJob:
         job = IngestJob(
             filename=filename or path.name,
@@ -68,10 +74,12 @@ class IngestionManager:
             trust_level=trust_level,
             origin=origin,
             size_bytes=path.stat().st_size,
+            section=section,
+            folder=folder,
         )
         with self._lock:
             self._jobs[job.id] = job
-            self._paths[job.id] = (path, delete_after)
+            self._paths[job.id] = (path, delete_after, content_hash)
             while len(self._jobs) > _MAX_JOBS_KEPT:
                 oldest = next(iter(self._jobs))
                 if not self._jobs[oldest].done:
@@ -122,20 +130,30 @@ class IngestionManager:
         source: str,
         trust_level: TrustLevel,
         source_per_file: bool = False,
+        section: str = "Unsorted",
+        folder: str = "General",
     ) -> list[IngestJob]:
         names = files if files is not None else [f.path for f in self.list_inbox().files]
-        jobs = []
+        prepared = []
         for name in names:
             path = self.resolve_inbox(name)
             if not is_supported(path.name):
                 continue
+            relative = path.relative_to(self.inbox_dir.resolve()).as_posix()
+            location = archive_location(relative, section, folder)
+            prepared.append((path, relative, location))
+        jobs = []
+        for path, relative, location in prepared:
             jobs.append(
                 self.submit(
                     path,
                     title=path.name,
-                    source=path.name if source_per_file else source,
+                    source=file_source(relative) if source_per_file else source,
                     trust_level=trust_level,
                     origin="inbox",
+                    section=location.section,
+                    folder=location.folder,
+                    filename=relative,
                 )
             )
         return jobs
@@ -195,7 +213,7 @@ class IngestionManager:
     def _process(self, job_id: str) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
-            path, delete_after = self._paths.pop(job_id, (None, False))
+            path, delete_after, content_hash = self._paths.pop(job_id, (None, False, None))
             if job is None or path is None or job.stage == IngestStage.CANCELLED:
                 return
             job.stage = IngestStage.PARSING
@@ -213,6 +231,20 @@ class IngestionManager:
             self._publish(snapshot)
 
         try:
+            content_hash = content_hash or file_hash(path)
+            # Folder imports preserve separate physical copies in separate locations.
+            # Re-uploading the same path/content remains idempotent.
+            identity = (
+                {"filename": job.filename, "section": job.section, "folder": job.folder}
+                if "/" in job.filename
+                else {}
+            )
+            if existing := self.kb.find_by_hash(content_hash, **identity):
+                with self._lock:
+                    job.stage = IngestStage.COMPLETED
+                    job.duplicate_of = job.document_id = existing.document_id
+                    job.bytes_read = job.size_bytes
+                return  # the finally block publishes the job and removes an upload
             report = self.kb.ingest_stream(
                 iter_blocks(path),
                 title=job.title,
@@ -221,6 +253,9 @@ class IngestionManager:
                 source_type=SourceType.FILE,
                 filename=job.filename,
                 size_bytes=job.size_bytes,
+                content_hash=content_hash,
+                section=job.section,
+                folder=job.folder,
                 progress=progress,
                 should_cancel=lambda: self._should_cancel(job_id),
             )

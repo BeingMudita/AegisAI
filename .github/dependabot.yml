@@ -1,0 +1,21 @@
+# Weekly dependency updates. The backend's requirements.lock is generated from
+# requirements.txt; after a bump, regenerate it with:
+#   uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes --header -o requirements.lock
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly

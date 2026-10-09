@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 
 from app.auth.schemas import UserInDB
 from app.database.models import Agent, Policy, User
@@ -33,7 +33,7 @@ def _policy(row: Policy, agent: str) -> AgentPolicy:
     )
 
 
-def _active():  # type: ignore[no-untyped-def]
+def _active() -> Select[tuple[Policy, str]]:
     return (
         select(Policy, Agent.name).join(Agent, Agent.id == Policy.agent_id).where(Policy.is_active)
     )

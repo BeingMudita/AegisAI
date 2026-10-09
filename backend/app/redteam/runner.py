@@ -3,7 +3,10 @@
 Suites are YAML files in ``attack-scenarios/`` (``REDTEAM_SUITES_DIR``):
 
 * ``firewall_cases.yaml`` — labelled malicious / benign texts, scanned on their
-  channel. *Detected* = FLAG or BLOCK.
+  channel. *Detected* = FLAG or BLOCK. This is the development set: the rules were
+  tuned while looking at it, so its scores are optimistic.
+* ``firewall_holdout.yaml`` — a held-out set in the same format that the rules were
+  never tuned on; it is scored separately and is the honest estimate.
 * ``agent_scenarios.yaml`` — full guarded agent turns, each in a fresh isolated
   runtime (own trust registry, knowledge base and gateway) with the deterministic
   rule-based brain, checked against expected outcomes.
@@ -28,6 +31,7 @@ from app.config import get_settings
 from app.database.enums import SubjectType
 from app.firewall.scanner import PromptFirewall
 from app.firewall.schemas import ContentChannel, FirewallAction
+from app.firewall.semantic import get_semantic_classifier
 from app.policies.config import get_global_config
 from app.rag.embeddings import HashingEmbedder
 from app.rag.knowledge_base import KnowledgeBase, seed_knowledge_base
@@ -70,11 +74,32 @@ def load_agent_scenarios() -> list[dict[str, Any]]:
     return _load("agent_scenarios.yaml", "scenarios")
 
 
-def _firewall() -> PromptFirewall:
+def load_paraphrase_cases() -> list[dict[str, Any]]:
+    """The paraphrase development set — training data for the semantic layer."""
+    if not (suites_dir() / "firewall_paraphrase.yaml").exists():
+        return []
+    return _load("firewall_paraphrase.yaml", "cases")
+
+
+HOLDOUT_FILES = ("firewall_holdout.yaml", "firewall_holdout_v2.yaml")
+
+
+def load_holdout_cases() -> list[dict[str, Any]]:
+    """Every held-out firewall case, from each held-out file that exists."""
+    return [
+        case
+        for name in HOLDOUT_FILES
+        if (suites_dir() / name).exists()
+        for case in _load(name, "cases")
+    ]
+
+
+def _firewall(*, semantic: bool = True) -> PromptFirewall:
     settings = get_settings()
     return PromptFirewall(
         block_threshold=settings.firewall_block_threshold,
         flag_threshold=settings.firewall_flag_threshold,
+        semantic=get_semantic_classifier() if semantic else None,
     )
 
 
@@ -86,10 +111,14 @@ def _ratio(num: int, den: int) -> float:
 # Firewall benchmark
 # --------------------------------------------------------------------------- #
 def run_firewall_benchmark(
-    cases: list[dict[str, Any]] | None = None, progress: Progress | None = None
+    cases: list[dict[str, Any]] | None = None,
+    progress: Progress | None = None,
+    *,
+    semantic: bool = True,
 ) -> FirewallReport:
+    """Scan every case; ``semantic=False`` measures the signature rules alone."""
     cases = cases if cases is not None else load_firewall_cases()
-    fw = _firewall()
+    fw = _firewall(semantic=semantic)
     tp = fp = tn = fn = blocked_malicious = blocked_benign = 0
     results: list[CaseResult] = []
     categories: dict[str, dict[str, int]] = {}
@@ -178,7 +207,11 @@ def fresh_runtime() -> AgentRuntime:
         top_k=settings.rag_top_k,
     )
     seed_knowledge_base(kb)
-    gateway = ToolGateway(config=config, firewall=firewall, trust=trust)
+    # The tools get the sandbox's own knowledge base and outbox too, so nothing a
+    # scenario does reaches live state.
+    gateway = ToolGateway(
+        config=config, firewall=firewall, trust=trust, knowledge_base=kb, outbox=[]
+    )
     return AgentRuntime(
         brain=RuleBasedBrain(),
         firewall=firewall,
@@ -186,6 +219,7 @@ def fresh_runtime() -> AgentRuntime:
         gateway=gateway,
         knowledge_base=kb,
         max_steps=settings.agent_max_steps,
+        turn_timeout=settings.agent_turn_timeout,
     )
 
 

@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ComponentType, ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentType, type ReactNode } from "react";
+import type { TokenUsage } from "../types";
 
 // ------------------------------------------------------------------ tones
 // Status colors never carry meaning alone: every badge pairs an icon + label,
@@ -52,9 +53,10 @@ export function actionTone(action: string): Tone {
     case "DENIED":
     case "blocked":
     case "denied":
-    case "CANCELLED":
       return "critical";
     case "APPROVED":
+    case "approved":
+      return "good";
     case "PARSING":
     case "SCREENING":
     case "EMBEDDING":
@@ -72,7 +74,7 @@ export function severityTone(severity: string): Tone {
 export function trustTone(level: string): Tone {
   return (
     (
-      { VERIFIED: "good", HIGH: "good", MEDIUM: "warning", LOW: "serious", UNTRUSTED: "critical" } as Record<
+      { VERIFIED: "good", HIGH: "good", MEDIUM: "warning", LOW: "serious", UNTRUSTED: "serious" } as Record<
         string,
         Tone
       >
@@ -101,6 +103,12 @@ export function formatBytes(n: number): string {
 
 export function formatNumber(n: number): string {
   return n.toLocaleString();
+}
+
+/** "1,234 tokens" — prefixed with "~" when estimated, with the cost when there is one. */
+export function formatTokens(usage: TokenUsage): string {
+  const tokens = `${usage.estimated ? "~" : ""}${formatNumber(usage.total_tokens)} tokens`;
+  return usage.cost_usd > 0 ? `${tokens} · $${usage.cost_usd.toFixed(4)}` : tokens;
 }
 
 type Icon = ComponentType<{ className?: string; strokeWidth?: number }>;
@@ -171,7 +179,7 @@ export function Card({
           <div className="flex min-w-0 items-start gap-3">
             {icon && <IconTile icon={icon} size="sm" />}
             <div className="min-w-0">
-              {title && <h2 className="font-heading text-[16px] font-semibold text-ink">{title}</h2>}
+              {title && <h2 className="text-[15px] font-semibold text-ink">{title}</h2>}
               {subtitle && <p className="mt-0.5 text-xs leading-relaxed text-ink-2">{subtitle}</p>}
             </div>
           </div>
@@ -201,7 +209,7 @@ export function StatTile({
       {icon && <IconTile icon={icon} tone={tone} />}
       <div className="min-w-0">
         <div className="text-xs font-medium text-ink-2">{label}</div>
-        <div className="font-heading tabular mt-0.5 text-[26px] font-semibold tracking-tight text-ink">{value}</div>
+        <div className="mt-0.5 text-2xl font-semibold tracking-tight text-ink">{value}</div>
         {note && <div className="mt-1 text-xs leading-relaxed text-muted">{note}</div>}
       </div>
     </div>
@@ -217,17 +225,12 @@ export function PageHeader({
   description: ReactNode;
   actions?: ReactNode;
 }) {
-  // The description is intentionally not shown under the title; it surfaces on
-  // hover of the title instead, keeping each page clean below its heading.
-  const hint = typeof description === "string" ? description : undefined;
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <h1
-        title={hint}
-        className="font-display cursor-default text-[26px] font-semibold tracking-wide text-ink"
-      >
-        {title}
-      </h1>
+      <div className="max-w-3xl">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">{title}</h1>
+        <p className="mt-1 text-sm leading-relaxed text-ink-2">{description}</p>
+      </div>
       {actions}
     </div>
   );
@@ -242,8 +245,21 @@ export function Tabs<T extends string>({
   value: T;
   onChange: (id: T) => void;
 }) {
+  // One underline that slides to the selected tab (re-measured when labels or counts change).
+  const list = useRef<HTMLDivElement>(null);
+  const [bar, setBar] = useState<{ left: number; width: number } | null>(null);
+  const shape = tabs.map((t) => `${t.id}:${t.label}:${t.count ?? ""}`).join("|");
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+      setBar(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [value, shape]);
   return (
-    <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-edge">
+    <div ref={list} role="tablist" className="relative flex gap-1 overflow-x-auto border-b border-edge">
       {tabs.map((t) => {
         const active = t.id === value;
         const I = t.icon;
@@ -254,7 +270,7 @@ export function Tabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(t.id)}
             className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition ${
-              active ? "border-accent text-ink" : "border-transparent text-ink-2 hover:text-ink"
+              active && !bar ? "border-accent text-ink" : active ? "border-transparent text-ink" : "border-transparent text-ink-2 hover:text-ink"
             }`}
           >
             {I && <I className="h-4 w-4" />}
@@ -265,6 +281,13 @@ export function Tabs<T extends string>({
           </button>
         );
       })}
+      {bar && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute bottom-0 h-0.5 rounded-full bg-accent transition-[left,width] duration-300 ease-out motion-reduce:transition-none"
+          style={{ left: bar.left, width: bar.width }}
+        />
+      )}
     </div>
   );
 }
@@ -276,7 +299,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function Button({ variant = "primary", size = "md", className = "", ...props }: ButtonProps) {
   const styles = {
-    primary: "bg-accent text-white shadow-sm hover:brightness-110",
+    primary: "bg-accent text-on-brand shadow-sm hover:brightness-110",
     ghost: "border border-edge bg-surface text-ink hover:bg-surface-2",
     danger: "bg-critical text-white hover:brightness-110",
     subtle: "text-ink-2 hover:bg-surface-2 hover:text-ink",
@@ -285,7 +308,7 @@ export function Button({ variant = "primary", size = "md", className = "", ...pr
   return (
     <button
       {...props}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${sizes} ${styles} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition motion-safe:active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-50 ${sizes} ${styles} ${className}`}
     />
   );
 }
@@ -337,7 +360,7 @@ export function Meter({
       className="relative h-2 w-full rounded-full"
       style={{ background: `color-mix(in srgb, ${TONE_VAR[tone]} 18%, transparent)` }}
     >
-      <div className="h-2 rounded-full transition-[width]" style={{ width: `${pct}%`, background: TONE_VAR[tone] }} />
+      <div className="meter-fill h-2 rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: TONE_VAR[tone] }} />
       {markers.map((m) => (
         <div
           key={m.label}

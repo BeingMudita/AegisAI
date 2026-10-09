@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -15,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.database.enums import ToolRequestStatus
 from app.database.models import ToolRequest
 from app.database.sync import transaction
+from app.firewall.schemas import FirewallAction
 from app.persistence.ratelimit import PostgresRateLimiter
 from app.tools.gateway import ApprovalError, ToolGateway
 from app.tools.schemas import CheckResult, ToolCallResult
@@ -25,13 +27,14 @@ def _to_result(row: ToolRequest) -> ToolCallResult:
         id=str(row.id),
         agent=row.agent,
         session_id=row.session_id,
+        requested_by=row.requested_by,
         tool=row.tool,
         arguments=row.arguments or {},
         status=row.status,
         decision_reason=row.decision_reason or "",
         checks=[CheckResult.model_validate(c) for c in row.checks or []],
         output=row.output,
-        output_action=row.output_action,
+        output_action=FirewallAction(row.output_action) if row.output_action else None,
         redactions=row.redactions or {},
         requested_at=row.requested_at,
         decided_at=row.decided_at,
@@ -46,6 +49,7 @@ def _values(result: ToolCallResult) -> dict:
     return {
         "agent": result.agent,
         "session_id": result.session_id,
+        "requested_by": result.requested_by,
         "tool": result.tool,
         "arguments": result.arguments,
         "status": result.status,
@@ -64,7 +68,7 @@ def _values(result: ToolCallResult) -> dict:
 
 
 class PostgresToolGateway(ToolGateway):
-    def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._limiter = PostgresRateLimiter()
 
@@ -87,6 +91,31 @@ class PostgresToolGateway(ToolGateway):
             select(ToolRequest)
             .where(ToolRequest.status == ToolRequestStatus.PENDING)
             .order_by(ToolRequest.requested_at.desc())
+        )
+        with transaction() as db:
+            return [_to_result(row) for row in db.scalars(query)]
+
+    def _count_pending(self) -> int:
+        query = select(func.count()).where(ToolRequest.status == ToolRequestStatus.PENDING)
+        with transaction() as db:
+            return db.scalar(query) or 0
+
+    def _expired_requests(self, now: datetime) -> list[ToolCallResult]:
+        query = select(ToolRequest).where(
+            (ToolRequest.status == ToolRequestStatus.PENDING) & (ToolRequest.expires_at <= now)
+        )
+        with transaction() as db:
+            return [_to_result(row) for row in db.scalars(query)]
+
+    def _decided_approvals(self, limit: int) -> list[ToolCallResult]:
+        query = (
+            select(ToolRequest)
+            .where(
+                ToolRequest.expires_at.is_not(None)
+                & (ToolRequest.status != ToolRequestStatus.PENDING)
+            )
+            .order_by(ToolRequest.requested_at.desc())
+            .limit(limit)
         )
         with transaction() as db:
             return [_to_result(row) for row in db.scalars(query)]

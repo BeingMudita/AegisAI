@@ -15,6 +15,7 @@ class SessionStatus(str, Enum):
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"
     TERMINATED = "TERMINATED"
+    EXPIRED = "EXPIRED"  # idle for longer than SESSION_IDLE_MINUTES
 
 
 class SourceType(str, Enum):

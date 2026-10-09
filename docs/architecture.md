@@ -24,11 +24,11 @@ START → guard_input ─┬─ blocked ─────────────�
 
 | Node | Checks |
 |------|--------|
-| `guard_input` | Agent not suspended (trust ≥ 0.2) · firewall on the user message (BLOCK ends the turn and costs trust; FLAG is audited and costs a little trust) |
+| `guard_input` | Agent not suspended for this principal (trust ≥ 0.2) · firewall on the user message (BLOCK ends the turn and costs trust; FLAG is audited and costs a little trust) |
 | `retrieve` | Policy must allow `search_documents` and trust must meet its bar · guarded RAG retrieval |
 | `plan` | The brain (Ollama or rule-based) proposes one tool call or to answer |
 | `act` | The tool gateway runs every checkpoint below |
-| `respond` | The brain writes the answer; retrieved / tool text is wrapped in `<data>` tags and declared non-executable (spotlighting) |
+| `respond` | The brain writes the answer; retrieved / tool text is HTML-escaped, wrapped in `<data>` tags and declared non-executable (spotlighting) · the turn's time budget (`AGENT_TURN_TIMEOUT`) caps every LLM call |
 | `guard_output` | DLP (secrets always; PII when the agent has sensitive-data categories) · exfiltration-link removal |
 
 ### Tool gateway (`app/tools/gateway.py`)
@@ -37,17 +37,30 @@ Checks run cheapest-first; the first failure denies the call.
 
 1. **registry** — tool exists in `default_policies.yaml` and isn't globally disabled
 2. **policy** — agent policy allows it (deny by default; block-list wins)
-3. **domain** — URL / email arguments are on the agent's domain allow-list (subdomains included)
+3. **domain** — URL / email arguments name exactly one destination (one plain email
+   address; one `https` URL with no credentials or backslashes) on the agent's domain
+   allow-list (subdomains included). Anything ambiguous is denied, not parsed leniently.
 4. **firewall** — arguments scanned on the `TOOL_ARGUMENTS` channel
-5. **trust** — agent trust ≥ the tool's `min_trust` (else risk-level default, else `TRUST_THRESHOLD`)
+5. **trust** — the agent's trust *for the requesting principal* ≥ the tool's `min_trust`
+   (else risk-level default, else `TRUST_THRESHOLD`); see [Trust](#trust)
 6. **rate_limit** — per agent and tool, sliding 60-second window
 7. **approval** — tools marked `requires_approval` stop here as `PENDING`
    (see [Human approval](#human-approval)); everything else continues
 
+Before a tool that sends data out is queued or run, **DLP** redacts its free-text
+arguments (the email subject and body, the upload payload): secrets always, PII
+when the agent handles sensitive data. Neither the recipient nor the stored
+request sees them.
+
 Then the tool runs (sandboxed simulations — no real shell, network or email),
 its **output** is scanned on the `TOOL_OUTPUT` channel (BLOCK withholds it and
-penalizes the source), and **DLP** redacts PII when the tool's data category is
-sensitive for the agent. Every outcome is audited and moves the agent's trust.
+penalizes the source; FLAG cuts the matched spans out and keeps the rest of the
+text as it was), and **DLP** redacts PII when the tool's data category is
+sensitive for the agent. Every outcome is audited and moves the agent's trust
+with the requesting principal (`requested_by`).
+
+Direct calls (`POST /api/tools/execute`) are ADMIN only and have no principal, so
+they move the agent's baseline.
 
 ## Component map
 
@@ -88,6 +101,16 @@ rewards are scaled by the headroom `(1 − score)`, so trust is lost quickly and
 regained slowly. A drop to a lower level raises a `TRUST_DEGRADATION` event.
 Agents start at 0.75; sources start from their declared trust level.
 
+Agents are shared, so trust earned or lost while a principal drives one is kept
+on a scoped subject, `FinanceAgent@alice` (shown as “FinanceAgent · for alice”).
+Every gate uses the lower of the agent's own baseline and that scoped score. One
+user's attacks therefore suspend the agent for that user only, and nobody can
+earn trust for an agent on anyone else's behalf. The baseline moves only through
+an administrator's override or through unattended runs with no principal
+(red-team scenarios, evaluation, direct operator calls), so an admin can still
+demote or suspend an agent for everyone. `GET /api/agents` reports the trust that
+gates the agent for the caller.
+
 ## Data stores
 
 Every operational store sits behind one interface with two implementations,
@@ -95,14 +118,14 @@ chosen by `STORAGE_BACKEND`:
 
 | Store | `memory` | `postgres` (`app/persistence/`) |
 |---|---|---|
-| Audit log | bounded deque | `security_events`, `decision_counters` (atomic upserts); not erasable via the API |
+| Audit log | bounded deque | `security_events` (written at once) and `decision_counters` (buffered per worker, one upsert at most every 2 s, before a summary and at shutdown); not erasable via the API |
 | Trust | dict + lock | `trust_scores` (row lock per update) + `trust_assessments` history |
 | Sessions | dict + lock | `agent_sessions`, `session_runs`, `agent_turns` |
 | Tool gateway log / limits / approvals | deque + per-process windows | `tool_requests` (incl. review columns) + `rate_limit_hits` |
-| Red-team runs | last 25 in memory | `redteam_runs` (JSON payload per run) |
-| Login throttle | per-process buckets | `rate_limit_hits` |
-| Users, policies | seeded in memory / JSON files | `users`, `agents`, `policies`, `tool_definitions` (seeded once) |
-| Knowledge base | in-memory index (+ optional disk save) | `document_sources` → `documents` → `document_chunks` → `embeddings` (pgvector, HNSW cosine index) |
+| Red-team runs | last 25 in memory | `redteam_runs` (JSON payload per run; older than the newest 25 are deleted) |
+| Login throttle | per-process buckets | `rate_limit_hits` (hits older than an hour are swept) |
+| Users, policies | seeded in memory / JSON files | `users`, `agents`, `policies` (seeded once; read through a 5 s cache), `tool_definitions` (a mirror of the policy file, refreshed on every seed) |
+| Knowledge base | in-memory index (+ optional disk save) | `document_sources` → `documents` → `document_chunks` → `embeddings` (pgvector, HNSW cosine index); `documents.content_hash` stops the same content being indexed twice |
 | Ingestion jobs | per process | `ingest_jobs` (any worker can list or cancel) |
 
 ### Cross-worker guarantees (Postgres)
@@ -162,13 +185,15 @@ PENDING ──approve──▶ APPROVED (claimed) ──re-check ok──▶ EXE
   check recorded.
 - **Accountable.** `reviewed_by`, `review_note` and `reviewed_at` are stored on the
   request and the decision is audited as a security event.
-- **Access.** `GET /api/approvals` is open to staff; approve and reject
+- **Access.** `GET /api/approvals` and `GET /api/approvals/pending-count` (the
+  navigation badge) are open to staff; approve and reject
   (`POST /api/approvals/{id}/approve|reject`) are admin-only.
 
 ## Red-team lab
 
 `POST /api/redteam/runs` (staff) starts a background run of the suites in
-`attack-scenarios/`: the 73-case firewall benchmark and the 21 agent scenarios.
+`attack-scenarios/`: the 73-case firewall benchmark (plus the 53-case held-out
+set, scored separately) and the 21 agent scenarios.
 Only one run executes at a time (409 otherwise; a run still marked running after 15 minutes is
 treated as stale).
 
@@ -176,7 +201,8 @@ Runs are sandboxed from live state:
 
 - `isolated_audit_log()` swaps the audit log for the duration of the run through a
   `ContextVar`, so attack traffic never reaches Security events or the counters.
-- Each agent scenario builds a fresh trust engine, tool gateway and knowledge base.
+- Each agent scenario builds a fresh trust engine, tool gateway and knowledge base,
+  and the gateway hands its tools that knowledge base and a private outbox.
 
 Progress is saved at most every 0.25 s. Finished runs (precision, recall, F1,
 per-family detection, confusion matrix, latency, every case and scenario) are kept
@@ -185,8 +211,8 @@ same runner.
 
 ## Threat coverage
 
-`app/compliance/catalog.py` is a reviewed, code-maintained mapping of 16 controls to
-the OWASP Top 10 for LLM Applications 2025 and nine MITRE ATLAS techniques. Each
+`app/compliance/catalog.py` is a reviewed, code-maintained mapping of 20 controls to
+the OWASP Top 10 for LLM Applications 2025 and ten MITRE ATLAS techniques. Each
 threat has a status (mitigated / partial / gap), the controls that address it, the
 evidence that should prove it, and a residual-risk statement.
 
@@ -221,8 +247,12 @@ tool registry and RAG rules come from `app/policies/default_policies.yaml` via
 - API responses disable caching and include nosniff, anti-framing, and no-referrer
   headers. Login hashing runs in a worker thread rather than blocking the event loop.
 - A bounded rolling-window limiter reserves login attempts atomically: ten per
-  ASGI peer per minute, with Retry-After on rejection. Unknown usernames still
+  ASGI peer per minute, plus twenty failures per account per 15 minutes, with
+  Retry-After on rejection. Disabled accounts get no token. Unknown usernames still
   run a password check against a dummy hash to reduce timing differences.
+- Route handlers that reach a store are plain `def` (FastAPI runs them in a worker
+  thread), as is the `get_current_user` dependency, so a database call never
+  blocks the event loop.
 
 ## Observable execution and session coordination
 

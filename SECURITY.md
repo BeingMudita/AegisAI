@@ -55,10 +55,13 @@ Before exposing AegisAI to real users:
       (`python -m app.database.migrate --seed`). Memory mode is single-worker and
       loses state on restart.
 - [ ] TLS terminated at the edge, `CORS_ORIGINS` set to the dashboard origin only,
-      and proxy trust configured in the ASGI server (the login throttle uses the
-      client address it sees).
-- [ ] An edge rate limiter in front of the API. Built-in limits are per tool and per
-      login, not per user.
+      and `FORWARDED_ALLOW_IPS` set to your proxy's address (the login throttle uses
+      the client address uvicorn derives; the image trusts private networks by
+      default, which is wrong if clients themselves are on a private network).
+- [ ] An edge rate limiter in front of the API. Built-in limits are per tool, per
+      login address and per account, not per user overall.
+- [ ] Install from `backend/requirements.lock` (hash-pinned) and keep CI's
+      `pip-audit` / `npm audit` steps green.
 - [ ] Review `backend/app/policies/default_policies.yaml`: kill switches for tools you
       don't need, `min_trust` per tool, and `requires_approval` for anything with
       external effect.

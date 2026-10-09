@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { Badge, Card, Empty, ErrorNote, PageHeader, StatTile, Tabs, type Tone } from "../components/ui";
+import { Badge, Card, Empty, ErrorNote, PageHeader, StatTile, Tabs, toneVar, type Tone } from "../components/ui";
 import { useApi } from "../hooks";
 import type { CoverageReport, CoverageStatus, Evidence, ThreatCoverage } from "../types";
 
@@ -208,7 +208,7 @@ export default function ThreatCoverage() {
                             {t.controls.includes(c.id) ? (
                               <span
                                 className="inline-block h-3 w-3 rounded-full"
-                                style={{ background: t.status === "gap" ? "var(--muted)" : "var(--series-1)" }}
+                                style={{ background: toneVar(STATUS[t.status].tone) }}
                                 title={`${c.name} defends against ${t.name}`}
                               />
                             ) : (

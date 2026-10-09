@@ -121,3 +121,7 @@ class IngestJobRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
+
+
+# Sources are matched by name case-insensitively.
+Index("ix_document_sources_name_lower", func.lower(DocumentSource.name))

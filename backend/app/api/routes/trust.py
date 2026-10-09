@@ -18,7 +18,7 @@ router = APIRouter(prefix="/trust", tags=["trust"])
 
 
 @router.get("")
-async def list_trust_scores(
+def list_trust_scores(
     subject_type: SubjectType | None = None,
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> dict:
@@ -32,7 +32,7 @@ async def list_trust_scores(
 
 
 @router.get("/{subject_type}/{subject_id}", response_model=TrustScoreDetail)
-async def get_trust_score(
+def get_trust_score(
     subject_type: SubjectType,
     subject_id: str,
     user: User = Depends(require_roles(*STAFF_ROLES)),
@@ -48,7 +48,7 @@ async def get_trust_score(
 
 
 @router.put("/{subject_type}/{subject_id}", response_model=TrustAssessmentRecord)
-async def override_trust_score(
+def override_trust_score(
     subject_type: SubjectType,
     subject_id: str,
     body: TrustOverride,

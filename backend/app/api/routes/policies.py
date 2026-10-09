@@ -1,8 +1,9 @@
 """Policies routes — view agent policies and query the policy engine.
 
-Read access for staff; write access for ADMIN only. Policies are currently
-served from the example store (see app/policies/store.py); PostgreSQL becomes
-the source of truth in a later step.
+Read access for staff; write access for ADMIN only. Policies come from the
+policy store (see app/policies/store.py): the example JSON files in memory mode,
+the ``policies`` table with STORAGE_BACKEND=postgres. Editing policies through the
+API is not implemented yet.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ def _engine_for(agent: str) -> PolicyEngine:
 
 
 @router.get("", response_model=list[AgentPolicy])
-async def list_all_policies(
+def list_all_policies(
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> list[AgentPolicy]:
     """List all agent policies."""
@@ -38,7 +39,7 @@ async def list_all_policies(
 
 
 @router.get("/{agent}", response_model=AgentPolicy)
-async def get_agent_policy(
+def get_agent_policy(
     agent: str,
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> AgentPolicy:
@@ -47,7 +48,7 @@ async def get_agent_policy(
 
 
 @router.get("/{agent}/allowances", response_model=AgentAllowances)
-async def get_allowances(
+def get_allowances(
     agent: str,
     user: User = Depends(get_current_user),
 ) -> AgentAllowances:
@@ -56,7 +57,7 @@ async def get_allowances(
 
 
 @router.get("/{agent}/can-use-tool/{tool}", response_model=PolicyDecision)
-async def can_use_tool(
+def can_use_tool(
     agent: str,
     tool: str,
     user: User = Depends(get_current_user),
@@ -66,7 +67,7 @@ async def can_use_tool(
 
 
 @router.get("/{agent}/can-access-domain/{domain}", response_model=PolicyDecision)
-async def can_access_domain(
+def can_access_domain(
     agent: str,
     domain: str,
     user: User = Depends(get_current_user),
@@ -75,9 +76,12 @@ async def can_access_domain(
     return _engine_for(agent).can_access_domain(domain)
 
 
-@router.post("", status_code=201)
-async def create_policy(
+@router.post("", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+def create_policy(
     user: User = Depends(require_roles(Role.ADMIN)),
-) -> dict:
-    """Create a policy (placeholder — DB-backed write lands with persistence)."""
-    return {"created": False, "detail": "not_implemented"}
+) -> None:
+    """Create a policy — not implemented yet (ADMIN only, so the route is reserved)."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Creating policies through the API is not implemented yet.",
+    )

@@ -1,5 +1,204 @@
 # Changelog
 
+## 2026-10-07 — Phases 10, 12 and 13: quotas and retention, semantic detection, supply chain
+
+This also merges `main` into this branch, which brings in the developer platform
+(SDK, `/v1/secure` gateway, CLI, `aegis.yaml`) and the four-configuration experiment.
+The merge needed three follow-up fixes:
+
+- the gateway now charges trust to the calling principal;
+- the gateway compares its API key in constant time;
+- the experiment's "trust off" configurations also bypass the per-principal trust
+  check.
+
+No new runtime dependencies were added.
+
+### Phase 13 — Supply chain (closes OWASP LLM03)
+
+- **Model provenance.** `backend/model-manifest.yaml` pins each model:
+  - the embedder to a Hugging Face commit and the SHA-256 of all 10 files it loads;
+  - the Ollama planners by manifest digest.
+
+  The embedder downloads only the pinned files at that commit, hashes them and loads
+  from the verified copy. The brain refuses an Ollama model whose digest differs and
+  falls back to the rule-based planner. `MODEL_PROVENANCE=enforce|warn|off`. A failed
+  check raises an `ANOMALY` event. The real download was verified: all 10 files match.
+- **AI-BOM.** `aegis aibom` and `GET /api/supply-chain/aibom` export the pinned models
+  as CycloneDX 1.6 `machine-learning-model` components with per-file hashes. The file
+  validates against the strict 1.6 schema. `aegis verify-models` and
+  `GET /api/supply-chain` report the checks.
+- **CI.** A new `supply-chain` job:
+  - generates CycloneDX SBOMs for Python and npm dependencies and for both images,
+    plus the AI-BOM;
+  - runs Trivy on the Dockerfiles (misconfiguration) and on both images, failing on a
+    fixable HIGH or CRITICAL; reviewed exceptions go in `.trivyignore`.
+
+  Every GitHub Action is now pinned to a commit SHA.
+- **Images.** The dashboard runs as non-root on `nginx-unprivileged` 1.30. Its
+  container port is now 8080 (Trivy DS-0002).
+
+### Phase 10 — Retention and quotas (closes OWASP LLM10)
+
+- **Per-principal budgets.**
+  - Daily turn, token and cost limits per user or API caller, set in
+    `default_policies.yaml` with role and principal overrides.
+  - A turn is reserved atomically before it runs (row lock on Postgres) and charged
+    afterwards with the tokens Ollama reports. Tokens are estimated for the
+    rule-based planner.
+  - Each LLM call is capped by `max_output_tokens`.
+  - A used-up budget returns 429 with `Retry-After`. The sessions route refuses
+    before the request ID is spent, and the first refusal of the day raises an
+    `ANOMALY` event.
+  - New endpoints: `GET /api/usage/me`, and `GET /api/usage` for staff. The dashboard
+    shows the tokens each turn used.
+- **Session expiry.** A session idle for longer than `SESSION_IDLE_MINUTES` (720)
+  becomes `EXPIRED` and refuses new messages.
+- **Retention.** A sweeper expires idle sessions and deletes ended sessions, audit
+  events and budget rows past `SESSION_/AUDIT_/USAGE_RETENTION_DAYS`. On Postgres an
+  advisory lock lets only one worker sweep at a time. `aegis retention` runs one pass.
+- **Pagination.** Keyset cursors on `/api/sessions` and `/api/security-events`.
+- Migration `0005`: the `EXPIRED` status, `last_activity_at` (backfilled from turns),
+  and `usage_budgets`.
+
+### Phase 12 — Semantic injection detection
+
+- **Paraphrase development set.** `firewall_paraphrase.yaml` has 103 cases: 53
+  attacks without the rules' trigger words and 50 hard look-alikes. The rules alone
+  catch 24.5% of its attacks.
+- **Semantic layer.** `app/firewall/semantic.py` is an L2 logistic regression over
+  hashed, stemmed word n-grams and the input channel, in pure Python.
+  `evaluation/train_semantic.py` trains it on the development sets only. Five-fold
+  cross-validation of rules-OR-semantic picks the L2 strength and the threshold at
+  ≤ 5% false positives. A test fails when the model is stale. The layer only scores
+  text the rules allow, and it raises ALLOW to FLAG, never to BLOCK.
+- **Fresh held-out set.** `firewall_holdout_v2.yaml` has 55 cases. It was written
+  after the model was frozen in commit `bab8086`, and the model was not changed
+  afterwards.
+- **Results (rules → + semantic).** Recall changed as follows:
+
+  | Data | Recall | FPR |
+  |---|---|---|
+  | Development, out-of-fold | 59.2% → 78.6% | 2.4% → 4.8% |
+  | Held-out v1 | 48.4% → 80.6% | 9.1% → 13.6% |
+  | **Held-out v2** | **27.3% → 60.6%** | **0% → 4.5%** |
+
+  On held-out v2 no benign case was blocked. The v1 gain is an upper bound, because
+  v1's misses were visible while the layer was being built. `run_eval.py` reports
+  the ablation for every suite.
+
+### Validation
+
+- Memory mode: 252 passed, 11 skipped. Postgres mode (`AEGIS_TEST_POSTGRES=1`):
+  263 passed. The migration-matches-models check passes with `0005`.
+- New tests:
+  - `test_supply_chain.py`: pins, tampering, enforce/warn/off, Ollama digests, brain
+    fallback, AI-BOM, API.
+  - `test_quotas_retention.py`: budgets, metering, 429s, expiry, retention, cursors,
+    on both backends.
+  - `test_semantic.py`: model freshness, held-out isolation, never-block,
+    determinism.
+- Ruff and mypy pass. The frontend type-checks, its 21 unit tests pass, and it builds.
+- Evaluation: development recall 100%, precision 98.0%, false-positive rate 3.0%.
+  Held-out (v1 + v2) recall 70.3% at 9.1% false-positive rate. Agent scenarios
+  22 / 22. The four-configuration table is unchanged.
+
+## 2026-10-04 — Code review fixes: security, correctness, performance, supply chain
+
+### What changed
+
+**Security**
+
+- **Direct tool calls are ADMIN only.** `POST /api/tools/execute` let any signed-in
+  user act as any agent (and earn trust on its behalf). Everyone else goes through
+  agent sessions.
+- **One destination per email or URL argument.** The domain check read only the text
+  after the last `@`, so `attacker@evil.io, cfo@company.com` passed as `company.com`.
+  Email arguments must now be one plain address; URLs must be a single `https` URL
+  with no credentials, backslashes or spaces. Anything ambiguous is denied.
+- **Trust is scoped to the principal.** Signals from a turn are charged to
+  `FinanceAgent@<user>`; every gate uses the lower of that and the agent's baseline.
+  One user's attacks can no longer suspend a shared agent for everyone. The baseline
+  moves only by admin override or unattended runs. `/api/agents` reports the trust
+  that gates the agent for the caller; the Trust page shows “FinanceAgent · for admin”.
+  Tool requests record `requested_by`, and approval re-checks against it.
+- **Spotlighting can't be escaped.** Text inside `<data>` blocks is HTML-escaped, so a
+  document containing `</data>` can no longer close the block early.
+- **Login throttling** adds a per-account limit (20 failures / 15 min) next to the
+  per-address one, and disabled accounts get no token. The Docker image sets
+  `FORWARDED_ALLOW_IPS` (private networks) so the throttle sees real client
+  addresses behind a proxy, and nginx replaces any client-supplied `X-Forwarded-For`.
+- **PyJWT replaces python-jose** (unmaintained, with published CVEs); `exp` and `sub`
+  are now required claims.
+- **DLP on outgoing tool arguments.** Email subjects and bodies and upload payloads
+  are redacted before the call is queued or run (secrets always, PII for agents with
+  sensitive data), so neither the recipient nor the stored request sees them.
+
+**Bugs**
+
+- nginx accepts uploads up to 1024 MB (it defaulted to 1 MB) and streams them.
+- `sanitize()` cuts injection spans out of the *original* text, so line breaks,
+  tables and Cyrillic/Greek text survive; leetspeak, spaced-out and base64 matches
+  are removed too (they used to stay), and invisible characters are stripped.
+- A non-object JSON reply from Ollama no longer fails the turn with a 500; every LLM
+  error falls back to the rule-based planner.
+- Turns have a wall-clock budget (`AGENT_TURN_TIMEOUT`, 150 s; nginx waits 200 s).
+- Chunks default to 180 words (was 512): all-MiniLM-L6-v2 reads about 190 words and
+  silently dropped the rest.
+- Red-team runs give the tools the sandbox's own knowledge base and outbox.
+- `tool_definitions` mirrors the policy file (it was seeded with
+  `requires_approval=false` for every tool).
+
+**Performance (Postgres mode)**
+
+- Route handlers that reach a store, and `get_current_user`, are plain `def`, so
+  database calls no longer block the event loop.
+- Progress polling checks session ownership without loading every turn.
+- Decision counters are buffered per worker (one upsert at most every 2 s, before a
+  summary and at shutdown); trust reads are a plain SELECT when the row exists;
+  policies are cached for `POLICY_CACHE_SECONDS` (5 s).
+- New `GET /api/approvals/pending-count` for the navigation badge; the approval queue
+  no longer loads 500 rows; the jobs list polls every 5 s unless something is
+  ingesting; changing a poll interval no longer blanks the data.
+- Migration `0004`: `tool_requests.requested_by`, `lower(...)` indexes for the
+  case-insensitive lookups, and a `(key, at)` index on `rate_limit_hits`. Rate-limit
+  hits older than an hour are swept; `redteam_runs` keeps the newest 25.
+
+**Code health and supply chain**
+
+- Removed the unused async engine (`database/session.py`, `init_db.py`) and the
+  `asyncpg` dependency, `require_any`, `check_sensitive` and `add_turn`.
+  `POST /api/policies` answers 501 (not 201 "not_implemented").
+- `DEBUG` defaults to false. The backend image has no compiler or headers. Dev ports
+  in compose bind to localhost. The Ollama image is pinned.
+- `backend/requirements.lock` pins and hashes every runtime package; the image and CI
+  install from it. CI adds `mypy` (now clean), `pip-audit` and `npm audit`;
+  Dependabot is configured. The audit found 12 advisories in Starlette 0.48, so
+  FastAPI moves to 0.142 and Starlette to 1.7.
+- Re-uploading content that is already indexed (same SHA-256) completes at once as
+  “Already indexed”; pasting duplicate text returns 409.
+
+**Evaluation**
+
+- New held-out firewall set, `attack-scenarios/firewall_holdout.yaml` (53 cases,
+  never used for tuning), scored with every firewall run and shown in the Red-team
+  lab and the report. On it the firewall scores precision 87.5%, recall 45.2%,
+  false-positive rate 9.1% (development set: 97.6% / 95.3% / 3.3%). It catches every
+  obfuscated, delimiter and tool-abuse case and none of the paraphrased ones.
+- Threat coverage: LLM03 Supply Chain moves from gap to partial (new DEPENDENCIES
+  control: 17 controls).
+
+### Validation
+
+- Memory mode: 182 passed, 11 skipped. Postgres mode (`AEGIS_TEST_POSTGRES=1`): 193 passed.
+- New tests cover ambiguous destinations, outgoing DLP, per-principal trust (unit and
+  end to end), sandbox isolation, sanitize formatting and obfuscated spans, per-account
+  throttling, disabled accounts, duplicates, the pending-count endpoint, Ollama
+  fallbacks and the turn budget, spotlight escaping, and the held-out set staying
+  disjoint from the development set.
+- Ruff, mypy, `pip-audit` (no known vulnerabilities) and `npm audit` pass; the
+  frontend type-checks and builds.
+- Evaluation: 21 / 21 agent scenarios; numbers above.
+
 ## 2026-10-03 — Assurance: human approval, red-team lab, threat coverage
 
 ### What changed

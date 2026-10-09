@@ -120,7 +120,9 @@ def run_gate(
     blast = attackgraph.blast_radius(profile).score
     risk_focus = [f.family for f in attackgraph.risk_guided_focus(profile)]
 
-    families, rt_passed, rt_total, rt_errors = ([], 0, 0, [])
+    families: list[RedTeamFamily] = []
+    rt_errors: list[str] = []
+    rt_passed = rt_total = 0
     if redteam:
         families, rt_passed, rt_total, rt_errors = _redteam_for(profile.name)
 

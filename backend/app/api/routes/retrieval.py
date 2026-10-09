@@ -10,19 +10,28 @@ Two ways to add files:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from app.auth.dependencies import get_current_user, require_roles
 from app.auth.roles import STAFF_ROLES, Role
 from app.auth.schemas import User
 from app.config import get_settings
 from app.database.enums import TrustLevel
+from app.rag.archive import archive_chunks, archive_documents
 from app.rag.ingestion import get_ingestion_manager
-from app.rag.knowledge_base import get_knowledge_base
+from app.rag.knowledge_base import DuplicateDocument, get_knowledge_base
 from app.rag.parsers import SUPPORTED_EXTENSIONS, is_supported
+from app.rag.paths import archive_location, file_source, normalize_relative_path
+from app.rag.review import forget_count
 from app.rag.schemas import (
+    ArchiveChunkPage,
+    ArchiveDocument,
+    ArchiveLocation,
+    DeleteDocumentsRequest,
+    DeleteDocumentsResult,
     DocumentChunkView,
     InboxImportRequest,
     InboxListing,
@@ -52,6 +61,36 @@ def search(req: SearchRequest, user: User = Depends(get_current_user)) -> Retrie
 
 
 # ------------------------------------------------------------------ documents
+@router.get("/archive", response_model=list[ArchiveDocument])
+def archive(user: User = Depends(require_roles(*STAFF_ROLES))) -> list[ArchiveDocument]:
+    return archive_documents(get_knowledge_base())
+
+
+@router.get("/documents/{document_id}/archive-chunks", response_model=ArchiveChunkPage)
+def archive_document_chunks(
+    document_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(12, ge=1, le=50),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> ArchiveChunkPage:
+    page = archive_chunks(get_knowledge_base(), document_id, offset, limit)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return page
+
+
+@router.put("/documents/{document_id}/location", response_model=IngestReport)
+def organize_document(
+    document_id: str,
+    location: ArchiveLocation,
+    user: User = Depends(require_roles(Role.ADMIN)),
+) -> IngestReport:
+    report = get_knowledge_base().move_document(document_id, location)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return report
+
+
 @router.get("/documents", response_model=list[IngestReport])
 def list_documents(user: User = Depends(require_roles(*STAFF_ROLES))) -> list[IngestReport]:
     """Every ingested document, newest first."""
@@ -63,8 +102,11 @@ def ingest_document(
     req: IngestRequest,
     user: User = Depends(require_roles(Role.ADMIN)),
 ) -> IngestReport:
-    """Screen, chunk, embed and index pasted text."""
-    return get_knowledge_base().ingest(req)
+    """Screen, chunk, embed and index pasted text (409 if it is already indexed)."""
+    try:
+        return get_knowledge_base().ingest(req)
+    except DuplicateDocument as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/documents/{document_id}/chunks", response_model=list[DocumentChunkView])
@@ -82,6 +124,18 @@ def delete_document(document_id: str, user: User = Depends(require_roles(Role.AD
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
 
 
+@router.post("/documents/delete", response_model=DeleteDocumentsResult)
+def delete_documents(
+    req: DeleteDocumentsRequest, user: User = Depends(require_roles(Role.ADMIN))
+) -> DeleteDocumentsResult:
+    """Remove several documents (a selection, a folder, a section) in one request."""
+    deleted = get_knowledge_base().remove_documents(req.document_ids)
+    forget_count()
+    removed = set(deleted)
+    missing = [d for d in dict.fromkeys(req.document_ids) if d not in removed]
+    return DeleteDocumentsResult(deleted=deleted, missing=missing)
+
+
 # -------------------------------------------------------------------- uploads
 @router.post("/uploads", response_model=list[IngestJob], status_code=202)
 def upload_files(
@@ -89,6 +143,9 @@ def upload_files(
     source: str = Form("Uploads"),
     trust_level: TrustLevel = Form(TrustLevel.MEDIUM),
     source_per_file: bool = Form(True),
+    section: str = Form("Unsorted", min_length=1, max_length=80),
+    folder: str = Form("General", min_length=1, max_length=1024),
+    relative_paths: list[str] | None = Form(None),
     user: User = Depends(require_roles(Role.ADMIN)),
 ) -> list[IngestJob]:
     """Upload files; each becomes a background ingestion job.
@@ -97,20 +154,39 @@ def upload_files(
     file can't drag down the trust of the clean files uploaded with it.
     """
     manager = get_ingestion_manager()
-    limit = get_settings().max_upload_mb * 1024 * 1024
-    jobs = []
-    for upload in files:
+    if not section.strip() or not folder.strip():
+        raise HTTPException(status_code=422, detail="Section and folder cannot be blank.")
+    if relative_paths is not None and len(relative_paths) != len(files):
+        raise HTTPException(status_code=422, detail="Each file needs one relative path.")
+    prepared = []
+    # Validate the entire batch before creating files or queuing any jobs.
+    for index, upload in enumerate(files):
         name = (upload.filename or "upload").replace("\\", "/").rsplit("/", 1)[-1]
+        try:
+            relative = normalize_relative_path(relative_paths[index] if relative_paths else name)
+            if relative.rsplit("/", 1)[-1] != name:
+                raise ValueError("The relative path must end with the uploaded file name.")
+            location = archive_location(relative, section.strip(), folder.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not is_supported(name):
             raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                status_code=415,
                 detail=f"'{name}' is not a supported type ({', '.join(SUPPORTED_EXTENSIONS)}).",
             )
-        target = manager.upload_dir / f"{uuid.uuid4().hex[:8]}-{name}"
+        if upload.size is not None and upload.size > get_settings().max_upload_mb * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"'{name}' exceeds the upload size limit.")
+        prepared.append((upload, name, relative, location))
+    limit = get_settings().max_upload_mb * 1024 * 1024
+    jobs = []
+    for upload, name, relative, location in prepared:
+        target = manager.upload_dir / f"{uuid.uuid4().hex}.{name.rsplit('.', 1)[-1]}"
         written = 0
+        digest = hashlib.sha256()  # hashed while copying, for duplicate detection
         with target.open("wb") as out:
             while block := upload.file.read(_COPY_CHUNK):
                 written += len(block)
+                digest.update(block)
                 if written > limit:
                     out.close()
                     target.unlink(missing_ok=True)
@@ -124,11 +200,14 @@ def upload_files(
             manager.submit(
                 target,
                 title=name,
-                source=name if source_per_file else source,
+                source=file_source(relative) if source_per_file else source,
                 trust_level=trust_level,
                 origin="upload",
                 delete_after=True,
-                filename=name,
+                filename=relative,
+                content_hash=digest.hexdigest(),
+                section=location.section,
+                folder=location.folder,
             )
         )
     return jobs
@@ -152,11 +231,15 @@ def import_inbox(
             source=req.source,
             trust_level=req.trust_level,
             source_per_file=req.source_per_file,
+            section=req.section,
+            folder=req.folder,
         )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Not in the inbox: {exc}"
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # ----------------------------------------------------------------------- jobs

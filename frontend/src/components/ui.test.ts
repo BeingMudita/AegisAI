@@ -7,6 +7,12 @@ describe("actionTone", () => {
     expect(actionTone("ALLOW")).toBe("good");
     expect(actionTone("EXECUTED")).toBe("good");
     expect(actionTone("passed")).toBe("good");
+    expect(actionTone("APPROVED")).toBe("good");
+  });
+  it("keeps red for blocked or denied, not for a cancelled job", () => {
+    expect(actionTone("BLOCK")).toBe("critical");
+    expect(actionTone("DENIED")).toBe("critical");
+    expect(actionTone("CANCELLED")).toBe("neutral");
   });
   it("maps the FLAG (confirm) states to warning", () => {
     expect(actionTone("FLAG")).toBe("warning");
@@ -34,12 +40,12 @@ describe("severityTone", () => {
 });
 
 describe("trustTone", () => {
-  it("rewards high trust and warns on low", () => {
+  it("rewards high trust and warns on low; red stays for blocked content", () => {
     expect(trustTone("VERIFIED")).toBe("good");
     expect(trustTone("HIGH")).toBe("good");
     expect(trustTone("MEDIUM")).toBe("warning");
     expect(trustTone("LOW")).toBe("serious");
-    expect(trustTone("UNTRUSTED")).toBe("critical");
+    expect(trustTone("UNTRUSTED")).toBe("serious");
   });
 });
 

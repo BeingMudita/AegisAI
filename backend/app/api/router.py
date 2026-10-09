@@ -21,9 +21,12 @@ from app.api.routes import (
     scanner,
     security_events,
     sessions,
+    supply_chain,
     threatintel,
     tools,
     trust,
+    usage,
+    vectors,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -41,9 +44,12 @@ api_router.include_router(scanner.router)
 api_router.include_router(compliance.router)
 api_router.include_router(policies.router)
 api_router.include_router(security_events.router)
+api_router.include_router(supply_chain.router)
+api_router.include_router(usage.router)
 api_router.include_router(registry.router)
 api_router.include_router(gate.router)
 api_router.include_router(adaptive.router)
 api_router.include_router(autopilot.router)
 api_router.include_router(attack_surface.router)
 api_router.include_router(threatintel.router)
+api_router.include_router(vectors.router)

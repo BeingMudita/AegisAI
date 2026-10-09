@@ -1,0 +1,7 @@
+# Accepted image vulnerabilities (read by the supply-chain CI job).
+#
+# CI fails on any HIGH or CRITICAL vulnerability that has a fix available.
+# Add an ID here only after review, with the reason and a revisit date, e.g.
+#
+#   # not reachable: we never parse untrusted TIFFs; revisit 2027-01-01
+#   CVE-2026-00000

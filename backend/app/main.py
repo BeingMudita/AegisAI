@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app import __version__
@@ -14,6 +15,7 @@ from app.api.router import api_router
 from app.config import get_settings
 from app.platform.gateway_api import router as gateway_router
 from app.platform.proxy import router as proxy_router
+from app.quotas.service import BudgetExceeded
 from app.telemetry.logging import configure_logging
 
 settings = get_settings()
@@ -36,7 +38,19 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         from app.persistence.seed import seed_reference_data
 
         await run_in_threadpool(seed_reference_data)
+    sweeper = None
+    if settings.retention_interval_minutes > 0:
+        from app.retention import RetentionSweeper
+
+        sweeper = RetentionSweeper(settings.retention_interval_minutes * 60)
+        sweeper.start()
     yield
+    if sweeper is not None:
+        sweeper.stop()
+    # Decision counters are buffered per worker; write what's left before exiting.
+    from app.telemetry.store import get_audit_log
+
+    await run_in_threadpool(get_audit_log().flush)
 
 
 app = FastAPI(
@@ -58,6 +72,16 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(gateway_router)  # developer platform: /v1/secure/*
 app.include_router(proxy_router)  # universal integration layer: /v1/proxy/*, /v1/chat/completions
+
+
+@app.exception_handler(BudgetExceeded)
+async def budget_exceeded(_: Request, exc: BudgetExceeded) -> JSONResponse:
+    """A principal's daily budget is used up: 429 until it resets."""
+    return JSONResponse(
+        status_code=429,
+        content={"detail": str(exc), "budget": exc.status.model_dump(mode="json")},
+        headers={"Retry-After": str(exc.retry_after)},
+    )
 
 
 @app.middleware("http")

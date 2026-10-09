@@ -20,8 +20,9 @@ sending actual email or querying production records.
    trace. The execution monitor displays actual node states, including repeated
    planning/tool checks. Quick requests can finish between 400 ms polls.
 4. **Exercise a boundary.** Send the supplied off-domain email example. Inspect
-   the denied tool's checkpoint evidence. Attacks alter the shared agent's trust;
-   use an isolated deployment for evaluation.
+   the denied tool's checkpoint evidence. Attacks lower the agent's trust *for the
+   user who sent them* (it appears on the Trust page as “FinanceAgent · for admin”);
+   other users keep the agent's normal standing.
 5. **Decide on a high-impact action.** Send “Email the CFO”. The email passes
    every automatic check and then waits in **Approvals**. Review the recipient
    and body, add a note, and approve or reject. Approval re-runs every check, so
@@ -60,31 +61,81 @@ inside its own region and the execution monitor is a disclosure above the chat.
   are process-local and lost on restart. With `STORAGE_BACKEND=postgres` all of them
   are durable and shared, so several workers or replicas can run behind a load
   balancer: session locks, replay rejection, rate limits and the login throttle
-  hold across workers. Session histories and the audit log are not yet pruned
-  (retention arrives in Phase 10).
+  hold across workers.
+- **Retention.** A sweeper runs every `RETENTION_INTERVAL_MINUTES` (60). On
+  Postgres an advisory lock lets only one worker sweep at a time. Each pass:
+  - expires sessions idle for longer than `SESSION_IDLE_MINUTES` (720);
+  - deletes sessions that ended more than `SESSION_RETENTION_DAYS` (30) ago,
+    with their turns;
+  - deletes security events older than `AUDIT_RETENTION_DAYS` (90);
+  - deletes budget counters older than `USAGE_RETENTION_DAYS` (90).
+
+  Retention is the only way events leave the durable audit log. Set a value to
+  `0` to keep that data forever. `aegis retention` runs one pass by hand. An
+  expired session refuses new messages; the caller starts a new session.
+- **Budgets.** Every user and API caller has daily limits on turns, tokens and
+  cost. The limits reset at 00:00 UTC and are set under `budgets:` in
+  `default_policies.yaml`, with per-role and per-principal overrides.
+  - Each turn is reserved before it runs and charged afterwards with the tokens
+    the LLM reported. For the rule-based planner, tokens are estimated from the
+    text.
+  - Each LLM call may generate at most `max_output_tokens`.
+  - A used-up budget returns HTTP 429 with `Retry-After`. The first refusal of
+    the day raises an `ANOMALY` event.
+  - `GET /api/usage/me` shows a caller's own budget. Staff can see everyone's
+    with `GET /api/usage`.
+  - Costs count only when `pricing` is set, which is meant for hosted models.
+    Local Ollama is free, so the cost cap stays off.
+  - Callers of the `/v1/secure` gateway that use the shared API key share one
+    budget, named `api-key`.
+- **Pagination.** `GET /api/sessions` and `GET /api/security-events` return a
+  page of results and a `next_cursor`. Pass `next_cursor` back as `cursor` to
+  get the next page. Cursors are keyset-based, so pages don't shift as new
+  items arrive.
 - The login limiter permits 10 attempts per client address per rolling minute,
-  including successful attempts. In memory mode it retains at most 4,096 active
-  peer buckets and fails closed for new peers when full; in Postgres mode the
-  budget is shared by every worker. It uses the ASGI client address, not raw
-  forwarded headers. Configure proxy trust in the ASGI server and deploy a shared
-  edge limiter before scaling; users behind one NAT may share a budget.
+  including successful attempts, and 20 *failed* attempts per account per 15
+  minutes (so a guessing run spread over many addresses still stops; the account
+  owner waits it out too). In memory mode it retains at most 4,096 active peer
+  buckets and fails closed for new peers when full; in Postgres mode the budget is
+  shared by every worker. It uses the ASGI client address, never raw forwarded
+  headers. Behind a proxy, uvicorn derives that address from `X-Forwarded-For`, but
+  only for hops listed in `FORWARDED_ALLOW_IPS`. The Docker image trusts private
+  networks by default (`127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`), which
+  fits nginx in compose and most PaaS load balancers; set it to your proxy's
+  address if clients themselves sit on a private network. The bundled nginx
+  replaces any client-supplied `X-Forwarded-For`. Users behind one NAT may still
+  share a budget; deploy a shared edge limiter before scaling.
+- Direct tool calls (`POST /api/tools/execute`) are ADMIN only; everyone else uses
+  agent sessions, where trust is scoped to the person sending the message.
+- An agent turn has a wall-clock budget (`AGENT_TURN_TIMEOUT`, 150 s). Once it is
+  spent the brain stops calling the LLM and finishes with the rule-based planner,
+  so a turn never outlives the proxy's read timeout (200 s in the bundled nginx).
+- Uploads up to `MAX_UPLOAD_MB` (1024) pass through the bundled nginx, which
+  streams them to the API instead of buffering them. A file whose content is
+  already indexed is recognised by its SHA-256 and not indexed again.
 - Progress returns only stage/status metadata, not unfinished model text, prompts,
   tool arguments, or provider errors. Final traces retain the existing evidence.
 - Evidence exports are snapshots, not signed or tamper-evident audit archives.
 - Tools remain simulations. Production integrations need scoped credentials,
   transport controls, timeouts, and review of consequential actions.
-- The firewall remains signature-based. Do not treat a passed scan as proof that
-  content is harmless. Its defense is combined with deny-by-default tool controls.
+- The firewall is signature rules plus a learned semantic layer. The semantic layer
+  flags paraphrased attacks for review and never blocks. About four in ten paraphrased
+  attacks in a fresh held-out set still pass, so do not treat a passed scan as proof
+  that content is harmless. The firewall works together with deny-by-default tool
+  controls. Set `FIREWALL_SEMANTIC=false` to run the rules alone.
 
 ## Next engineering priorities
 
 1. ~~Migrate operational stores to PostgreSQL; use transactions, shared request IDs,
    and distributed execution locks before adding workers or replicas.~~ Done (Phase 9).
-2. Add durable, access-controlled audit retention, session expiry, quotas, and
-   pagination for large deployments.
+2. ~~Add durable, access-controlled audit retention, session expiry, quotas, and
+   pagination for large deployments.~~ Done (Phase 10).
 3. Integrate organization identity (SSO/OIDC), tenant isolation, and per-principal
-   abuse controls; evaluate the effect of untrusted callers on shared agent trust.
+   abuse controls. (Trust is already scoped per principal.)
 4. Add carefully scoped real tool adapters behind the existing approval workflow.
    Keep the gateway as their only execution path.
-5. Extend the existing red-team evaluation with paraphrased attacks before adding
-   a model-based classifier or making stronger detection claims.
+5. ~~Extend the red-team evaluation with paraphrased attacks, then add a
+   model-based classifier.~~ Done (Phase 12). The learned semantic layer raises
+   recall on a fresh held-out set from 27% to 61%. Next steps:
+   - a neural classifier behind the same interface;
+   - an independent, external held-out set.

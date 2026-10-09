@@ -17,6 +17,8 @@ friction-free.
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -59,7 +61,7 @@ def require_gateway_access(
     settings = get_settings()
     configured = settings.aegis_api_key
     if configured:
-        if x_aegis_key and x_aegis_key == configured:
+        if x_aegis_key and hmac.compare_digest(x_aegis_key.encode(), configured.encode()):
             return "api-key"
         principal = _jwt_principal(authorization)
         if principal:
@@ -115,14 +117,18 @@ class AgentAllowance(BaseModel):
 # ---------------------------------------------------------------- endpoints
 @router.post("/chat", response_model=SecureResult)
 def secure_chat(
-    body: ChatRequest, _principal: str = Depends(require_gateway_access)
+    body: ChatRequest, principal: str = Depends(require_gateway_access)
 ) -> SecureResult:
-    """Run one guarded agent turn. Sync so FastAPI threadpools the LLM call."""
+    """Run one guarded agent turn. Sync so FastAPI threadpools the LLM call.
+
+    Trust signals are charged to the agent's score with the caller, so one
+    integration's attacks never lower the agent's shared baseline."""
     turn = get_runtime().run_turn(
         agent=body.agent,
         session_id=body.session_id or "gateway",
         message=body.message,
-        history=[tuple(pair) for pair in body.history],
+        history=list(body.history),
+        principal=principal,
     )
     return SecureResult.from_turn(turn)
 

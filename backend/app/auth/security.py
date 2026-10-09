@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 
 from app.auth.roles import Role
 from app.auth.schemas import TokenData
@@ -65,9 +65,12 @@ def decode_access_token(token: str) -> TokenData | None:
     """Decode and validate a JWT, returning its claims or ``None`` if invalid."""
     try:
         payload = jwt.decode(
-            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["exp", "sub"]},
         )
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
     username = payload.get("sub")

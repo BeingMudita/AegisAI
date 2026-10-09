@@ -6,6 +6,13 @@ Scores are held by a :class:`TrustRepository`: in memory by default, or in the
 (:class:`app.persistence.trust.PostgresTrustRepository`). Every change is an
 atomic read-modify-write recorded as a :class:`TrustAssessmentRecord`; a drop to
 a lower trust level raises a ``TRUST_DEGRADATION`` security event.
+
+Agents are shared by every principal, so trust earned or lost while a principal
+drives an agent is kept on a *scoped* subject, ``"<agent>@<principal>"``. A user's
+attacks (or a conversation hijacked by injected content) degrade the agent for that
+user only, and can't suspend it for everyone else. The agent's own score is the
+baseline: administrators set it, and unattended runs (red-team, evaluation, direct
+operator calls without a principal) move it. Every gate uses the lower of the two.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from app.trust.scoring import (
 
 HISTORY_LEN = 200
 _LEVEL_RANK = {lvl: i for i, lvl in enumerate(TrustLevel)}  # UNTRUSTED=0 … VERIFIED=4
+SCOPE_SEPARATOR = "@"
 
 # compute(previous_score) -> new_score
 Compute = Callable[[float], float]
@@ -52,6 +60,16 @@ Compute = Callable[[float], float]
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def agent_subject(agent: str, principal: str | None = None) -> str:
+    """The trust subject for ``agent`` acting for ``principal`` (the agent itself without one)."""
+    return f"{agent}{SCOPE_SEPARATOR}{principal}" if principal else agent
+
+
+def base_agent(subject_id: str) -> str:
+    """The agent name of a (possibly scoped) agent subject."""
+    return subject_id.split(SCOPE_SEPARATOR, 1)[0]
 
 
 def default_initial(subject_type: SubjectType) -> float:
@@ -87,6 +105,10 @@ class TrustRepository(Protocol):
     def get_or_create(
         self, subject_type: SubjectType, subject_id: str, initial: float
     ) -> float: ...
+
+    def peek(self, subject_type: SubjectType, subject_id: str) -> float | None:
+        """The current score, or None if the subject has none (never creates one)."""
+        ...
 
     def update(
         self,
@@ -146,6 +168,11 @@ class MemoryTrustRepository:
     def get_or_create(self, subject_type: SubjectType, subject_id: str, initial: float) -> float:
         with self._lock:
             return self._entry(subject_type, subject_id, initial).score
+
+    def peek(self, subject_type: SubjectType, subject_id: str) -> float | None:
+        with self._lock:
+            entry = self._entries.get((subject_type, subject_id.lower()))
+            return entry.score if entry else None
 
     def update(
         self,
@@ -218,7 +245,11 @@ class TrustEngine:
                     else SecuritySeverity.MEDIUM
                 ),
                 source="trust",
-                agent=record.subject_id if record.subject_type == SubjectType.AGENT else None,
+                agent=(
+                    base_agent(record.subject_id)
+                    if record.subject_type == SubjectType.AGENT
+                    else None
+                ),
                 session_id=session_id,
                 description=(
                     f"{record.subject_type.value} '{record.subject_id}' trust fell "
@@ -232,6 +263,15 @@ class TrustEngine:
     # -------------------------------------------------------------- reading
     def score(self, subject_type: SubjectType, subject_id: str) -> float:
         return self.repo.get_or_create(subject_type, subject_id, default_initial(subject_type))
+
+    def agent_score(self, agent: str, principal: str | None = None) -> float:
+        """The trust that gates ``agent`` acting for ``principal``: the lower of the
+        agent's baseline and its score with that principal."""
+        baseline = self.score(SubjectType.AGENT, agent)
+        if not principal:
+            return baseline
+        scoped = self.repo.peek(SubjectType.AGENT, agent_subject(agent, principal))
+        return baseline if scoped is None else min(baseline, scoped)
 
     def get(self, subject_type: SubjectType, subject_id: str) -> TrustScoreDetail | None:
         return self.repo.detail(subject_type, subject_id)
@@ -264,6 +304,25 @@ class TrustEngine:
             assessed_by="trust-engine",
         )
         return self._changed(record, session_id)
+
+    def observe_agent(
+        self,
+        agent: str,
+        principal: str | None,
+        signal: TrustSignal,
+        *,
+        rationale: str | None = None,
+        session_id: str | None = None,
+    ) -> TrustAssessmentRecord:
+        """Record ``signal`` for ``agent`` — against its score with ``principal`` if
+        there is one, so one principal's behaviour never moves the shared baseline."""
+        return self.observe(
+            SubjectType.AGENT,
+            agent_subject(agent, principal),
+            signal,
+            rationale=rationale,
+            session_id=session_id,
+        )
 
     def override(
         self,
@@ -299,8 +358,42 @@ class TrustEngine:
         action: str = "act",
     ) -> TrustDecision:
         """Decide whether ``subject_id`` is trusted enough to perform ``action``."""
+        return self._decide(
+            subject_type,
+            subject_id,
+            self.score(subject_type, subject_id),
+            required=required,
+            action=action,
+        )
+
+    def evaluate_agent(
+        self,
+        agent: str,
+        principal: str | None = None,
+        *,
+        required: float | None = None,
+        action: str = "act",
+    ) -> TrustDecision:
+        """Gate ``agent`` acting for ``principal`` on :meth:`agent_score`."""
+        name = f"{agent} (for {principal})" if principal else agent
+        return self._decide(
+            SubjectType.AGENT,
+            name,
+            self.agent_score(agent, principal),
+            required=required,
+            action=action,
+        )
+
+    def _decide(
+        self,
+        subject_type: SubjectType,
+        subject_id: str,
+        score: float,
+        *,
+        required: float | None,
+        action: str,
+    ) -> TrustDecision:
         need = self.default_threshold if required is None else required
-        score = self.score(subject_type, subject_id)
         level = level_for(score)
 
         if subject_type == SubjectType.AGENT and score < SUSPENSION_THRESHOLD:

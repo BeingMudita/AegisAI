@@ -1,8 +1,10 @@
 """Seed reference data into Postgres: users, agents, agent policies, tool definitions.
 
 Idempotent and safe to run from several workers at once (an advisory lock
-serializes it). Existing rows are never overwritten — an administrator's later
-changes win over the files they were seeded from.
+serializes it). Existing users, agents and policies are never overwritten — an
+administrator's later changes win over the files they were seeded from. Tool
+definitions are the exception: they mirror ``default_policies.yaml`` and are
+refreshed from it on every seed.
 """
 
 from __future__ import annotations
@@ -56,15 +58,18 @@ def seed_reference_data() -> None:
                     )
                 )
 
+        # tool_definitions is a read-only mirror of default_policies.yaml (the source of
+        # truth the gateway reads), kept for SQL reporting — so it is overwritten, not
+        # just inserted, to keep it in step with the file.
         for tool in get_global_config().tools:
+            values = {
+                "description": tool.description,
+                "risk_level": tool.risk_level,
+                "is_enabled": tool.allowed,
+                "requires_approval": tool.requires_approval,
+            }
             db.execute(
                 insert(ToolDefinition)
-                .values(
-                    name=tool.name,
-                    description=tool.description,
-                    risk_level=tool.risk_level,
-                    is_enabled=tool.allowed,
-                    requires_approval=False,
-                )
-                .on_conflict_do_nothing(index_elements=[ToolDefinition.name])
+                .values(name=tool.name, **values)
+                .on_conflict_do_update(index_elements=[ToolDefinition.name], set_=values)
             )

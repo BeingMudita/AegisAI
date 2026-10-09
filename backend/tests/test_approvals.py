@@ -113,6 +113,12 @@ def test_approvals_api_roles() -> None:
     analyst, admin = _h("analyst", "analyst123"), _h("admin", "admin123")
     queue = client.get("/api/approvals", headers=analyst).json()
     assert queue["pending"][0]["id"] == request_id
+    count = client.get("/api/approvals/pending-count", headers=analyst)
+    # The badge also counts documents awaiting review (see tests/test_review.py).
+    assert count.json()["tools"] == 1
+    assert count.json()["pending"] == 1 + count.json()["documents"]
+    agent = _h("agent", "agent123")
+    assert client.get("/api/approvals/pending-count", headers=agent).status_code == 403
     assert (
         client.post(f"/api/approvals/{request_id}/approve", json={}, headers=analyst).status_code
         == 403
@@ -123,4 +129,7 @@ def test_approvals_api_roles() -> None:
     assert resp.status_code == 200 and resp.json()["status"] == "EXECUTED"
     again = client.post(f"/api/approvals/{request_id}/reject", json={}, headers=admin)
     assert again.status_code == 409
+    assert client.get("/api/approvals/pending-count", headers=admin).json()["tools"] == 0
+    recent = client.get("/api/approvals", headers=admin).json()["recent"]
+    assert [r["id"] for r in recent] == [request_id]
     assert client.post("/api/approvals/nope/approve", json={}, headers=admin).status_code == 404

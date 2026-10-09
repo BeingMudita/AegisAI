@@ -174,6 +174,7 @@ export default function RedTeam() {
 
   const r = run.data;
   const fw = r?.firewall ?? null;
+  const ho = r?.holdout ?? null;
   const ag = r?.agents ?? null;
   const toggle = (s: Suite) => setSelected((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
   const isRunning = r?.status === "running" || !!running;
@@ -206,7 +207,7 @@ export default function RedTeam() {
                 ShieldAlert,
                 "Firewall benchmark",
                 suites.data
-                  ? `${suites.data.firewall.cases} labelled inputs · ${Object.keys(suites.data.firewall.categories).length} attack families plus benign look-alikes`
+                  ? `${suites.data.firewall.cases} labelled inputs · ${Object.keys(suites.data.firewall.categories).length} attack families plus benign look-alikes · ${suites.data.firewall.holdout_cases} held-out`
                   : "…",
               ],
               [
@@ -355,6 +356,40 @@ export default function RedTeam() {
           >
             <CaseTable cases={fw.results} />
           </Card>
+
+          {ho && (
+            <Card
+              title="Held-out set"
+              subtitle={`${ho.cases} inputs nothing was tuned or trained on: the honest estimate of how detection generalises`}
+              icon={FlaskConical}
+            >
+              <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                {(
+                  [
+                    ["Attacks detected", pct(ho.recall), `${ho.confusion.tp} of ${ho.malicious} attacks`],
+                    ["Precision", pct(ho.precision), "of everything flagged"],
+                    ["False-alarm rate", pct(ho.false_positive_rate), `${ho.confusion.fp} of ${ho.benign} benign`],
+                    ["Development set", pct(fw.recall), "detected on the cases the rules were tuned on"],
+                  ] as const
+                ).map(([label, value, note]) => (
+                  <div key={label}>
+                    <dt className="text-xs text-ink-2">{label}</dt>
+                    <dd className="tabular text-2xl font-semibold">{value}</dd>
+                    <dd className="text-xs text-muted">{note}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-4 text-xs leading-relaxed text-ink-2">
+                Signature rules generalise to obfuscation, delimiter tricks and tool abuse but miss paraphrased attacks
+                that avoid their vocabulary. The semantic layer (rule SEM-001) catches many of those and flags them for
+                review; what still gets through is what the tool gateway, trust scoring and human approval are for.
+                Filter the cases below for the misses and false alarms.
+              </p>
+              <div className="mt-4">
+                <CaseTable cases={ho.results} />
+              </div>
+            </Card>
+          )}
         </>
       )}
 

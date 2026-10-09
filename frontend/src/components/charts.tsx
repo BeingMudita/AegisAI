@@ -8,8 +8,6 @@ import {
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -35,60 +33,8 @@ const TOOLTIP = {
   cursor: { fill: "var(--grid)", fillOpacity: 0.6 },
 };
 
-export const ALLOWED_COLOR = "#6f8795";
-export const DENIED_COLOR = "var(--critical)";
-
-/** A donut with a center total and a labelled legend (values never chart-only). */
-export function DonutChart({
-  data,
-  unit,
-  size = 184,
-}: {
-  data: { label: string; value: number; color: string }[];
-  unit?: string;
-  size?: number;
-}) {
-  const total = data.reduce((s, d) => s + d.value, 0);
-  return (
-    <div className="flex flex-wrap items-center gap-6">
-      <div className="relative shrink-0" style={{ width: size, height: size }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="value"
-              nameKey="label"
-              innerRadius="64%"
-              outerRadius="100%"
-              paddingAngle={data.length > 1 ? 2 : 0}
-              stroke="var(--surface)"
-              strokeWidth={2}
-              isAnimationActive={false}
-            >
-              {data.map((d) => (
-                <Cell key={d.label} fill={d.color} />
-              ))}
-            </Pie>
-            <Tooltip {...TOOLTIP} formatter={(v) => [`${v}${unit ? ` ${unit}` : ""}`, "Count"]} />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="font-heading tabular text-2xl font-semibold text-ink">{total}</span>
-          <span className="text-[10px] tracking-wide text-muted uppercase">{unit ?? "total"}</span>
-        </div>
-      </div>
-      <ul className="min-w-[140px] flex-1 space-y-2 text-sm">
-        {data.map((d) => (
-          <li key={d.label} className="flex items-center gap-2.5">
-            <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: d.color }} />
-            <span className="min-w-0 flex-1 truncate text-ink-2">{d.label}</span>
-            <span className="tabular font-medium text-ink">{d.value}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+export const ALLOWED_COLOR = "var(--chart-allowed)";
+export const DENIED_COLOR = "var(--chart-denied)";
 
 /** A chart card with a Chart / Table toggle so values are never chart-only. */
 export function ChartCard({

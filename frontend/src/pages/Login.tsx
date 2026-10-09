@@ -22,7 +22,7 @@ export default function Login() {
   }
   return <div className="auth-shell">
     <section className="auth-story">
-      <div className="flex items-center gap-3"><Logo className="h-9 w-9" /><span className="font-display text-lg font-bold tracking-wide">AEGIS<span className="text-[#c3e0b0]">AI</span></span><span className="ml-auto text-[10px] tracking-[0.2em] text-white/60">SECURITY WORKSPACE</span></div>
+      <div className="flex items-center gap-3"><Logo className="h-9 w-9" /><span className="text-xl font-semibold tracking-tight">AegisAI</span><span className="ml-auto text-[10px] tracking-widest text-white/60">SECURITY WORKSPACE</span></div>
       <div>
         <h1>More capable agents.<br />Clearer boundaries.</h1>
         <p>A practical workspace to connect your knowledge, govern agent actions, and understand every security decision.</p>
@@ -37,7 +37,7 @@ export default function Login() {
     <section className="auth-form" aria-label="Sign in">
       <div>
         <span className="eyebrow">Welcome to your workspace</span>
-        <h2 className="font-display mt-3 text-[26px] font-semibold tracking-tight">Sign in to AegisAI</h2>
+        <h2 className="mt-3 text-3xl font-semibold tracking-tight">Sign in to AegisAI</h2>
         <p className="mt-3 mb-8 text-sm leading-relaxed text-ink-2">Use your organization’s credentials to continue.</p>
         <form onSubmit={submit} className="space-y-5">
           <label className="block text-sm"><span className="mb-2 block font-medium">Username</span><input className={inputClass} value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required disabled={busy} placeholder="Enter your username" /></label>

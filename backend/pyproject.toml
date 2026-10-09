@@ -32,6 +32,9 @@ pythonpath = ["."]
 python_version = "3.11"
 warn_unused_ignores = true
 ignore_missing_imports = true
+# Legacy Phase-3 RAG modules re-added by a merge from main: nothing imports them and
+# they target an API that no longer exists. Kept for their author to remove or port.
+exclude = ['app/rag/(pipeline|retrieval|ingest|llm|extraction)[.]py$']
 
 [tool.ruff.lint.per-file-ignores]
 "app/compliance/catalog.py" = ["E501"]  # threat descriptions are prose data

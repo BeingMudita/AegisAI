@@ -5,19 +5,25 @@ FROM python:3.11-slim
 
 ARG INSTALL_ML=false
 
+# FORWARDED_ALLOW_IPS: proxies whose X-Forwarded-For uvicorn believes. The default
+# trusts private-network hops (nginx in docker compose, a PaaS load balancer) and
+# takes the first public address after them as the client, so the login throttle
+# sees real client addresses and a caller can't spoof one with its own header.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=utf-8
+    PYTHONIOENCODING=utf-8 \
+    FORWARDED_ALLOW_IPS=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 
 WORKDIR /app
 
-# System deps for psycopg2 / building wheels
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev curl \
+# Every dependency ships a binary wheel (psycopg2-binary bundles libpq), so no
+# compiler or headers are needed; curl is only for the health check.
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt backend/requirements-ml.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+# requirements.lock pins every package (direct and transitive) for reproducible builds.
+COPY backend/requirements.lock backend/requirements-ml.txt ./
+RUN pip install --no-cache-dir -r requirements.lock \
     && if [ "$INSTALL_ML" = "true" ]; then pip install --no-cache-dir -r requirements-ml.txt; fi
 
 COPY backend/ ./

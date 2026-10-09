@@ -16,7 +16,7 @@ from functools import lru_cache
 
 from app.config import get_settings
 from app.database.enums import SecurityEventType, SecuritySeverity
-from app.firewall.normalize import normalize
+from app.firewall.normalize import normalize, strip_invisible
 from app.firewall.rules import RULES, SIGNAL_RULES, Rule
 from app.firewall.schemas import (
     ContentChannel,
@@ -25,6 +25,7 @@ from app.firewall.schemas import (
     RuleInfo,
     RuleMatch,
 )
+from app.firewall.semantic import SemanticClassifier, get_semantic_classifier
 from app.telemetry.store import get_audit_log
 
 _EXCERPT_LEN = 80
@@ -44,12 +45,14 @@ class PromptFirewall:
         block_threshold: float = 0.8,
         flag_threshold: float = 0.4,
         rules: tuple[Rule, ...] = RULES,
+        semantic: SemanticClassifier | None = None,
     ) -> None:
         if not 0 < flag_threshold <= block_threshold <= 1:
             raise ValueError("Require 0 < flag_threshold <= block_threshold <= 1.")
         self.block_threshold = block_threshold
         self.flag_threshold = flag_threshold
         self.rules = rules
+        self.semantic = semantic
 
     # ------------------------------------------------------------- scanning
     def scan(
@@ -75,13 +78,14 @@ class PromptFirewall:
 
         # 2. Alternate readings (de-leeted, de-spaced). A rule that only fires
         #    here means the author obfuscated it on purpose — tracked per kind
-        #    so the right obfuscation signal is scored below.
+        #    so the right obfuscation signal is scored below. Spans are mapped back
+        #    to the canonical text so the obfuscated span can be redacted too.
         evaded_leet = False
         evaded_spacing = False
         labelled = [("leet", v) for v in norm.leet_variants]
         if norm.spaced_variant is not None:
             labelled.append(("spaced", norm.spaced_variant))
-        for kind, variant in labelled:
+        for number, (kind, variant) in enumerate(labelled):
             for rule in self.rules:
                 if rule.rule_id in matches:
                     continue
@@ -91,16 +95,19 @@ class PromptFirewall:
                         evaded_leet = True
                     else:
                         evaded_spacing = True
+                    start, end = norm.variant_span(number, m.start(), m.end())
                     matches[rule.rule_id] = RuleMatch(
                         rule_id=rule.rule_id,
                         category=rule.category,
                         weight=rule.weight_for(indirect),
                         excerpt=_excerpt(m.group(0)),
+                        start=start,
+                        end=end,
                     )
 
-        # 3. Encoded payloads.
+        # 3. Encoded payloads — the span is the whole encoded token.
         hidden_payload = False
-        for payload in norm.decoded_payloads:
+        for payload, (start, end) in zip(norm.decoded_payloads, norm.payload_spans, strict=True):
             for rule in self.rules:
                 m = rule.pattern.search(payload)
                 if m and rule.rule_id not in matches:
@@ -110,6 +117,8 @@ class PromptFirewall:
                         category=rule.category,
                         weight=rule.weight_for(indirect),
                         excerpt=_excerpt("base64→ " + m.group(0)),
+                        start=start,
+                        end=end,
                     )
 
         # 4. Obfuscation signals.
@@ -130,7 +139,28 @@ class PromptFirewall:
                 matches, "OB-005", "leetspeak / symbol-substituted instruction", indirect
             )
 
-        return self._verdict(list(matches.values()), channel)
+        verdict = self._verdict(list(matches.values()), channel)
+
+        # 5. Semantic layer — only for text the rules let through. A hit raises
+        #    ALLOW to FLAG (review, sanitise, audit) and never to BLOCK.
+        if self.semantic is not None and verdict.action == FirewallAction.ALLOW:
+            p = self.semantic.probability(norm.text, channel.value, canonical=True)
+            if p >= self.semantic.threshold:
+                matches["SEM-001"] = RuleMatch(
+                    rule_id="SEM-001",
+                    category="SEMANTIC",
+                    weight=self.flag_threshold,
+                    excerpt=f"injection intent p={p:.2f}",
+                )
+                verdict = self._verdict(list(matches.values()), channel)
+                if verdict.action == FirewallAction.BLOCK:
+                    verdict = verdict.model_copy(
+                        update={
+                            "action": FirewallAction.FLAG,
+                            "reason": verdict.reason.replace("BLOCK", "FLAG", 1),
+                        }
+                    )
+        return verdict
 
     @staticmethod
     def _add_signal(
@@ -176,17 +206,28 @@ class PromptFirewall:
     # ------------------------------------------------------------ sanitizing
     @staticmethod
     def sanitize(text: str, verdict: FirewallVerdict) -> str:
-        """Return the normalized text with matched injection spans removed."""
-        canonical = normalize(text).text
+        """Return ``text`` with every matched injection span replaced by a marker.
+
+        Spans are found in the canonical text and cut out of the *original*, so the
+        rest keeps its line breaks, tables and non-Latin script; invisible characters
+        are stripped from what is kept. ``verdict`` must come from scanning ``text``.
+        """
+        norm = normalize(text)
         merged: list[list[int]] = []
         for start, end in sorted((m.start, m.end) for m in verdict.matches if m.start >= 0):
             if merged and start <= merged[-1][1]:
                 merged[-1][1] = max(merged[-1][1], end)
             else:
                 merged.append([start, end])
-        for start, end in reversed(merged):
-            canonical = canonical[:start] + REDACTION + canonical[end:]
-        return canonical
+        out: list[str] = []
+        kept_from = 0
+        for start, end in merged:
+            cut_start, cut_end = norm.original_span(start, end)
+            out.append(strip_invisible(text[kept_from:cut_start]))
+            out.append(REDACTION)
+            kept_from = cut_end
+        out.append(strip_invisible(text[kept_from:]))
+        return "".join(out)
 
     # ------------------------------------------------------------- auditing
     def inspect(
@@ -271,4 +312,5 @@ def get_firewall() -> PromptFirewall:
     return PromptFirewall(
         block_threshold=settings.firewall_block_threshold,
         flag_threshold=settings.firewall_flag_threshold,
+        semantic=get_semantic_classifier(),
     )

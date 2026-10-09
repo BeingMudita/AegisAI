@@ -18,6 +18,7 @@ import {
   Empty,
   ErrorNote,
   PageHeader,
+  formatTokens,
   toneVar,
   type Tone,
 } from "../components/ui";
@@ -130,7 +131,9 @@ function TurnCard({ turn, index }: { turn: AgentTurn; index: number }) {
       actions={
         <span className="flex items-center gap-2">
           <Badge tone={DECISION_TONE[decision]}>{decision}</Badge>
-          <span className="text-xs text-ink-2">{turn.duration_ms} ms</span>
+          <span className="text-xs text-ink-2">
+            {turn.duration_ms} ms{turn.usage && ` · ${formatTokens(turn.usage)}`}
+          </span>
         </span>
       }
     >

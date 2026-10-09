@@ -37,6 +37,7 @@ class ToolCallResult(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     agent: str
     session_id: str | None = None
+    requested_by: str | None = None  # the principal the agent acted for, if any
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     status: ToolRequestStatus = ToolRequestStatus.PENDING

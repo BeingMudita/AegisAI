@@ -3,6 +3,7 @@ import {
   Bot,
   Database,
   FlaskConical,
+  FolderTree,
   Gauge,
   LayoutDashboard,
   GitBranch,
@@ -14,6 +15,7 @@ import {
   ScrollText,
   ShieldAlert,
   ShieldCheck,
+  UserCheck,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
@@ -28,11 +30,13 @@ const AgentConsole = lazy(() => import("./pages/AgentConsole"));
 const Events = lazy(() => import("./pages/Events"));
 const FirewallLab = lazy(() => import("./pages/FirewallLab"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
+const DatabasePage = lazy(() => import("./pages/Database"));
 const Overview = lazy(() => import("./pages/Overview"));
 const Policies = lazy(() => import("./pages/Policies"));
 const Trust = lazy(() => import("./pages/Trust"));
 const Architecture = lazy(() => import("./pages/Architecture"));
 const Sessions = lazy(() => import("./pages/Sessions"));
+const Approvals = lazy(() => import("./pages/Approvals"));
 const RedTeam = lazy(() => import("./pages/RedTeam"));
 const ThreatCoverage = lazy(() => import("./pages/ThreatCoverage"));
 const AttackReplay = lazy(() => import("./pages/AttackReplay"));
@@ -90,12 +94,28 @@ const ROUTES: Route[] = [
     render: () => <KnowledgeBase />,
   },
   {
+    id: "database",
+    label: "Database",
+    group: "Operate",
+    icon: FolderTree,
+    staffOnly: true,
+    render: () => <DatabasePage />,
+  },
+  {
     id: "console",
     label: "Agent workspace",
     group: "Operate",
     icon: Bot,
     staffOnly: false,
     render: () => <AgentConsole />,
+  },
+  {
+    id: "approvals",
+    label: "Approvals",
+    group: "Operate",
+    icon: UserCheck,
+    staffOnly: true,
+    render: () => <Approvals />,
   },
   {
     id: "scanner",
@@ -167,6 +187,8 @@ export default function App() {
   const drawer = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const runtime = useApi<{ brain: string }>(user ? "/api/agents/runtime" : null);
+  const approvals = useApi<{ pending: number; tools: number; documents: number }>(isStaff(user) ? "/api/approvals/pending-count" : null, 5000);
+  const pendingApprovals = approvals.data?.pending ?? 0;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -200,14 +222,14 @@ export default function App() {
 
   const nav = (
     <nav className="workspace-nav flex h-full flex-col" aria-label="Main navigation">
-      <div className="flex items-center gap-3 px-5 py-5">
+      <div className="flex items-center gap-3 px-5 py-4">
         <Logo />
         <div>
-          <div className="font-display text-[16px] font-bold tracking-wide text-nav-ink">AEGIS<span className="text-accent">AI</span><span className="ml-2 rounded border border-edge px-1 py-0.5 text-[8px] font-medium tracking-[0.18em] text-nav-ink-2">CONSOLE</span></div>
+          <div className="text-[17px] font-semibold tracking-tight text-nav-ink">AegisAI<span className="ml-2 rounded border border-edge px-1 py-0.5 text-[9px] font-medium tracking-wide text-nav-ink-2">CONSOLE</span></div>
           <div className="mt-1 text-[11px] text-nav-ink-2">Agent security workspace</div>
         </div>
       </div>
-      <div className="flex-1 space-y-5 overflow-y-auto px-3 py-2">
+      <div className="flex-1 space-y-3 overflow-y-auto px-3 py-1">
         {(["Monitor", "Operate", "Assure", "Govern"] as const).map((group) => {
           const items = routes.filter((r) => r.group === group);
           if (!items.length) return null;
@@ -227,7 +249,7 @@ export default function App() {
                       setMenuOpen(false);
                     }}
                     aria-current={active ? "page" : undefined}
-                    className={`group relative mb-0.5 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition ${
+                    className={`group relative flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-left text-sm transition ${
                       active ? "font-semibold text-nav-ink" : "text-nav-ink hover:bg-[var(--nav-hover)]"
                     }`}
                     style={active ? { background: "var(--nav-active)" } : undefined}
@@ -237,6 +259,17 @@ export default function App() {
                       className={`h-[18px] w-[18px] ${active ? "text-accent" : "text-nav-ink-2 group-hover:text-nav-ink"}`}
                     />
                     {r.label}
+                    {r.id === "approvals" && pendingApprovals > 0 && (
+                      <span
+                        key={pendingApprovals}
+                        className="badge-pop ml-auto rounded-full px-1.5 text-[11px] font-semibold text-on-brand"
+                        style={{ background: "var(--warning)" }}
+                        aria-label={`${pendingApprovals} waiting: ${approvals.data?.tools ?? 0} agent actions, ${approvals.data?.documents ?? 0} documents`}
+                        title={`${approvals.data?.tools ?? 0} agent actions · ${approvals.data?.documents ?? 0} documents with blocked content or an untrusted source`}
+                      >
+                        {pendingApprovals > 99 ? "99+" : pendingApprovals}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -244,28 +277,28 @@ export default function App() {
           );
         })}
       </div>
-      <div className="m-3 rounded-xl p-3" style={{ background: "var(--nav-hover)" }}>
-        <div className="flex items-center gap-3">
-          <span className="brand-gradient flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold text-white">
-            {initials(user.username)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-nav-ink">{user.username}</div>
-            <div className="truncate text-xs text-nav-ink-2 capitalize">{role}</div>
-          </div>
+      {/* One row, so every link still fits above it on a short screen. */}
+      <div className="m-3 flex items-center gap-3 rounded-xl p-2.5" style={{ background: "var(--nav-hover)" }}>
+        <span className="brand-gradient flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-on-brand">
+          {initials(user.username)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-nav-ink">{user.username}</div>
+          <div className="truncate text-xs text-nav-ink-2 capitalize">{role}</div>
         </div>
         <button
           onClick={logout}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-edge px-3 py-1.5 text-sm text-nav-ink transition hover:bg-surface-2"
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-xs text-nav-ink transition hover:bg-surface-2"
+          title="Log out"
         >
-          <LogOut className="h-4 w-4" /> Log out
+          <LogOut className="h-3.5 w-3.5" /> Log out
         </button>
       </div>
     </nav>
   );
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-page">
       <a className="skip-link" href="#main-content" onClick={e => { e.preventDefault(); document.getElementById("main-content")?.focus(); }}>Skip to content</a>
       {/* desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-edge bg-nav lg:block">{nav}</aside>
@@ -273,8 +306,8 @@ export default function App() {
       {/* mobile drawer */}
       {menuOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setMenuOpen(false)} />
-          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation menu" className="absolute inset-y-0 left-0 w-72 max-w-[85%] bg-nav shadow-xl">
+          <div className="drawer-backdrop absolute inset-0 bg-black/50" onClick={() => setMenuOpen(false)} />
+          <aside ref={drawer} role="dialog" aria-modal="true" aria-label="Navigation menu" className="drawer-panel absolute inset-y-0 left-0 w-72 max-w-[85%] bg-nav shadow-xl">
             <button
               onClick={() => setMenuOpen(false)}
               className="absolute top-5 right-3 rounded-md p-1 text-nav-ink-2 hover:text-ink"
@@ -314,7 +347,7 @@ export default function App() {
                 </span>
               )}
               <div className="hidden items-center gap-2 border-l border-edge pl-3 sm:flex">
-                <span className="brand-gradient flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white">
+                <span className="brand-gradient flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-on-brand">
                   {initials(user.username)}
                 </span>
                 <div className="leading-tight">
@@ -325,7 +358,7 @@ export default function App() {
             </div>
           </div>
         </header>
-        <main id="main-content" tabIndex={-1} className="mx-auto max-w-[1600px] px-4 py-6 md:px-8 md:py-8"><PageBoundary key={current.id}><Suspense fallback={<p className="py-12 text-sm text-ink-2" role="status">Loading {current.label.toLowerCase()}…</p>}>{current.render()}</Suspense></PageBoundary></main>
+        <main id="main-content" tabIndex={-1} className="mx-auto max-w-[1600px] px-4 py-6 md:px-8 md:py-8"><PageBoundary key={current.id}><Suspense fallback={<p className="py-12 text-sm text-ink-2" role="status">Loading {current.label.toLowerCase()}…</p>}><div className="page-enter">{current.render()}</div></Suspense></PageBoundary></main>
       </div>
     </div>
   );
