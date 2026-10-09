@@ -129,7 +129,60 @@ function layout(root: TreeNode, sizeBy: SizeBy) {
   return { nodes, extent };
 }
 
+/** The flat (2D) layout: the same nodes in the same order as ``layout``, with groups on
+ *  rings and documents in a sunflower spiral beside their folder; z is 0 throughout. */
+function layoutFlat(root: TreeNode, sizeBy: SizeBy) {
+  const { nodes, extent: _ignored } = layout(root, sizeBy);
+  void _ignored;
+  const flat = nodes.map((n) => ({ ...n }));
+  const spiral = (n: number) => 6.2 * Math.sqrt(n + 0.5);
+  // Re-place groups on their rings, keeping each one's angle.
+  const index = new Map(flat.map((n, i) => [n, i]));
+  function place(i: number, a0: number, a1: number, radius: number) {
+    const n = flat[i];
+    const angle = (a0 + a1) / 2;
+    n.x = radius * Math.cos(angle);
+    n.y = radius * Math.sin(angle);
+    n.z = 0;
+    const kids = flat.filter((m) => m.parent === i && m.kind !== "document");
+    const docs = flat.filter((m) => m.parent === i && m.kind === "document");
+    const parts: { weight: number; child?: number; docs?: typeof docs }[] = kids.map((c) => ({
+      weight: Math.sqrt(c.tree?.documents.length ?? 1) + 0.6, child: index.get(c)!,
+    }));
+    if (docs.length && kids.length) parts.push({ weight: Math.sqrt(docs.length) + 0.6, docs });
+    const sunflower = (list: typeof docs, cx: number, cy: number) =>
+      list.forEach((d, j) => {
+        const rr = 6.2 * Math.sqrt(j + 0.5), th = j * GOLDEN;
+        d.x = cx + rr * Math.cos(th); d.y = cy + rr * Math.sin(th); d.z = 0;
+      });
+    if (docs.length && !kids.length) {
+      const out = n.r + spiral(docs.length) + 10;
+      const ux = radius ? Math.cos(angle) : 1, uy = radius ? Math.sin(angle) : 0;
+      sunflower(docs, n.x + ux * out, n.y + uy * out);
+    }
+    const sum = parts.reduce((t, q) => t + q.weight, 0);
+    let a = a0;
+    for (const q of parts) {
+      const span = ((a1 - a0) * q.weight) / sum;
+      if (q.child !== undefined) place(q.child, a, a + span, radius + RING);
+      else if (q.docs) {
+        const mid = a + span / 2, rr = radius + RING * 0.75;
+        sunflower(q.docs, rr * Math.cos(mid), rr * Math.sin(mid));
+      }
+      a += span;
+    }
+  }
+  place(0, -Math.PI, Math.PI, 0);
+  const extent = Math.max(RING, ...flat.map((n) => Math.hypot(n.x, n.y) + n.r));
+  return { nodes: flat, extent };
+}
+
+type Mode = "2d" | "3d";
+const MODE_KEY = "aegis.map.mode";
+const MORPH_MS = 900;
+
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeBack = (t: number) => 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2); // a little overshoot
 const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
 const clampPitch = (p: number) => Math.max(-1.35, Math.min(1.35, p));
@@ -156,7 +209,10 @@ export default function DataMap({
   const [review, setReview] = useState<Review>("any");
   const [hover, setHover] = useState<{ node: MapNode; x: number; y: number } | null>(null);
   const reduce = useMemo(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
-  const [autoSpin, setAutoSpin] = useState(!reduce);
+  const [mode, setModeState] = useState<Mode>(() => {
+    try { return localStorage.getItem(MODE_KEY) === "2d" ? "2d" : "3d"; } catch { return "3d"; }
+  });
+  const [autoSpin, setAutoSpin] = useState(!reduce && mode === "3d");
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const size = useRef({ w: 800, h: 620 });
@@ -175,7 +231,11 @@ export default function DataMap({
     [tree],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const { nodes, extent } = useMemo(() => layout(treeRef.current, sizeBy), [signature, sizeBy]);
+  const { nodes, extent } = useMemo(
+    () => (mode === "2d" ? layoutFlat(treeRef.current, sizeBy) : layout(treeRef.current, sizeBy)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [signature, sizeBy, mode],
+  );
   const groups = useMemo(() => nodes.filter((n) => n.kind !== "document"), [nodes]);
   const docs = useMemo(() => nodes.filter((n) => n.kind === "document"), [nodes]);
   const needle = find.trim().toLocaleLowerCase();
@@ -233,8 +293,11 @@ export default function DataMap({
   // ---- animation engine (refs: the loop never waits for React) ------------
   const view = useRef<View>({ k: 1, tx: 0, ty: 0 }); // zoom and screen offset, as drawn
   const target = useRef<View>({ k: 1, tx: 0, ty: 0 }); // where they are heading
-  const turn = useRef<Turn>({ yaw: 0.3, pitch: 0.42 }); // camera orbit, as drawn
-  const turnTarget = useRef<Turn>({ yaw: 0.3, pitch: 0.42 });
+  // Camera orbit, as drawn; flat mode looks straight at the plane (no turn, no tilt).
+  const turn = useRef<Turn>(mode === "2d" ? { yaw: 0, pitch: 0 } : { yaw: 0.3, pitch: 0.42 });
+  const turnTarget = useRef<Turn>(mode === "2d" ? { yaw: 0, pitch: 0 } : { yaw: 0.3, pitch: 0.42 });
+  // Switching 2D <-> 3D: every dot glides from where it was to its new place.
+  const morph = useRef<{ start: number; x: Float32Array; y: Float32Array; z: Float32Array } | null>(null);
   const panVelocity = useRef({ x: 0, y: 0 }); // drag momentum, px per ms
   const spinVelocity = useRef({ yaw: 0, pitch: 0 }); // turn momentum, rad per ms
   const lastTouch = useRef(0); // the last time someone moved the map by hand
@@ -253,12 +316,22 @@ export default function DataMap({
   const fitted = useRef(false);
 
   // Everything the loop reads from React, refreshed every render.
-  const live = useRef({ nodes, extent, showDocs, shownDocs, groupsWithShown, filtering, matches, hover: hover?.node ?? null, scopeKey, autoSpin });
-  live.current = { nodes, extent, showDocs, shownDocs, groupsWithShown, filtering, matches, hover: hover?.node ?? null, scopeKey, autoSpin };
+  const live = useRef({ nodes, extent, showDocs, shownDocs, groupsWithShown, filtering, matches, hover: hover?.node ?? null, scopeKey, autoSpin, mode });
+  live.current = { nodes, extent, showDocs, shownDocs, groupsWithShown, filtering, matches, hover: hover?.node ?? null, scopeKey, autoSpin, mode };
 
-  // A fresh layout blooms in from the centre.
+  // A fresh layout blooms in from the centre; a 2D/3D switch morphs the existing dots.
+  const laidOut = useRef({ signature: "", sizeBy: sizeBy as SizeBy });
   useEffect(() => {
     const n = nodes.length;
+    const prev = anim.current;
+    const sameData = laidOut.current.signature === signature && laidOut.current.sizeBy === sizeBy && prev.px.length === n;
+    laidOut.current = { signature, sizeBy };
+    if (sameData) {
+      morph.current = reduce ? null : { start: performance.now(), x: prev.px.slice(), y: prev.py.slice(), z: prev.pz.slice() };
+      kick();
+      return;
+    }
+    morph.current = null;
     anim.current = {
       alpha: new Float32Array(n), scale: new Float32Array(n),
       px: new Float32Array(n), py: new Float32Array(n), pz: new Float32Array(n),
@@ -297,7 +370,7 @@ export default function DataMap({
         const decay = Math.exp(-dt / 600);
         sv.yaw *= decay; sv.pitch *= decay; busy = true;
       } else { sv.yaw = 0; sv.pitch = 0; }
-      if (L.autoSpin && !reduce && visible.current && now - lastTouch.current > 1000) {
+      if (L.mode === "3d" && L.autoSpin && !reduce && visible.current && now - lastTouch.current > 1000) {
         RT.yaw += AUTO_SPIN * dt;
         busy = true;
       }
@@ -321,6 +394,11 @@ export default function DataMap({
     const since = now - born.current;
     const fadeTau = reduce ? 0.0001 : 180;
     const drift = !reduce && visible.current;
+    const M = morph.current;
+    const m = M ? easeInOut(clamp01((now - M.start) / MORPH_MS)) : 1;
+    if (M && m >= 1) morph.current = null;
+    else if (M) busy = true;
+    const flat = L.mode === "2d";
 
     // Per node: bloom-in, fade and resize towards targets, drift, then project to the screen.
     const cy = Math.cos(R.yaw), syw = Math.sin(R.yaw), cp = Math.cos(R.pitch), sp = Math.sin(R.pitch);
@@ -343,12 +421,19 @@ export default function DataMap({
       const amp = drift ? (isDoc ? 1.1 : n.kind === "root" ? 0 : 2.5) * p : 0;
       const wx = ox + (n.x - ox) * e + amp * Math.sin(now * 0.00055 + n.phase);
       const wy = oy + (n.y - oy) * e + amp * Math.cos(now * 0.00047 + n.phase * 1.3);
-      const wz = oz + (n.z - oz) * e + amp * Math.sin(now * 0.0005 + n.phase * 0.7);
-      A.px[i] = wx; A.py[i] = wy; A.pz[i] = wz;
+      const wz = oz + (n.z - oz) * e + (flat ? 0 : amp * Math.sin(now * 0.0005 + n.phase * 0.7));
+      if (M && m < 1) {
+        A.px[i] = M.x[i] + (wx - M.x[i]) * m;
+        A.py[i] = M.y[i] + (wy - M.y[i]) * m;
+        A.pz[i] = M.z[i] + (wz - M.z[i]) * m;
+      } else {
+        A.px[i] = wx; A.py[i] = wy; A.pz[i] = wz;
+      }
 
       // Orbit (yaw around the vertical axis, then pitch), then perspective.
-      const x1 = wx * cy + wz * syw, z1 = -wx * syw + wz * cy;
-      const y2 = wy * cp - z1 * sp, z2 = wy * sp + z1 * cp;
+      const qx = A.px[i], qy = A.py[i], qz = A.pz[i];
+      const x1 = qx * cy + qz * syw, z1 = -qx * syw + qz * cy;
+      const y2 = qy * cp - z1 * sp, z2 = qy * sp + z1 * cp;
       const persp = D / (D + z2);
       A.sx[i] = v.tx + v.k * x1 * persp;
       A.sy[i] = v.ty - v.k * y2 * persp;
@@ -387,7 +472,8 @@ export default function DataMap({
     const ext = L.extent;
     // Depth cue: near = full colour, the far side of the map fades to about 40%.
     const fogScale = 1 / (2 * ext * 0.9);
-    const fog = (z: number) => 0.4 + 0.6 * clamp01(0.5 - z * fogScale);
+    const flat = L.mode === "2d" && !morph.current;
+    const fog = (z: number) => (flat ? 1 : 0.4 + 0.6 * clamp01(0.5 - z * fogScale));
     const bloom = (i: number) => clamp01((since - N[i].delay) / BLOOM_MS);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -590,12 +676,32 @@ export default function DataMap({
     target.current = { k, tx: w / 2 - ((x0 + x1) / 2) * k, ty: h / 2 - ((y0 + y1) / 2) * k };
     kick();
   }
+  function setMode(next: Mode) {
+    if (next === mode) return;
+    try { localStorage.setItem(MODE_KEY, next); } catch { /* private window: just don't remember */ }
+    spinVelocity.current = { yaw: 0, pitch: 0 };
+    panVelocity.current = { x: 0, y: 0 };
+    turnTarget.current = next === "2d" ? { yaw: 0, pitch: 0 } : { yaw: 0.3, pitch: 0.42 };
+    setAutoSpin(next === "3d" && !reduce);
+    setModeState(next);
+  }
+  // A new layout (or mode) may have a different size: settle the camera on it.
+  const fittedFor = useRef({ mode, sizeBy });
+  useEffect(() => {
+    if (fittedFor.current.mode === mode && fittedFor.current.sizeBy === sizeBy) return;
+    fittedFor.current = { mode, sizeBy };
+    target.current = fitView();
+    if (reduce) view.current = { ...target.current };
+    kick();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, sizeBy]);
+
   function resetView() {
     target.current = fitView();
-    turnTarget.current = { yaw: turnTarget.current.yaw, pitch: 0.42 };
+    turnTarget.current = mode === "2d" ? { yaw: 0, pitch: 0 } : { yaw: turnTarget.current.yaw, pitch: 0.42 };
     panVelocity.current = { x: 0, y: 0 };
     spinVelocity.current = { yaw: 0, pitch: 0 };
-    setAutoSpin(!reduce);
+    setAutoSpin(mode === "3d" && !reduce);
     onScope("");
     kick();
   }
@@ -668,8 +774,20 @@ export default function DataMap({
           <input type="checkbox" className="h-4 w-4" style={{ accentColor: "var(--brand)" }} checked={showDocs} onChange={(e) => setShowDocs(e.target.checked)} />
           Show documents
         </label>
+        <div className="flex shrink-0 rounded-lg border border-edge p-0.5" role="group" aria-label="Map view">
+          {(["2d", "3d"] as const).map((v) => (
+            <button
+              key={v}
+              aria-pressed={mode === v}
+              onClick={() => setMode(v)}
+              className={`rounded-md px-3 py-1 text-sm font-semibold transition ${mode === v ? "bg-surface-2 text-ink" : "text-ink-2 hover:text-ink"}`}
+            >
+              {v.toUpperCase()}
+            </button>
+          ))}
+        </div>
         <div className="flex shrink-0 gap-1">
-          {!reduce && (
+          {!reduce && mode === "3d" && (
             <Button
               variant="ghost"
               size="sm"
@@ -736,11 +854,11 @@ export default function DataMap({
         <canvas
           ref={canvas}
           role="img"
-          aria-label={`3D map of the archive: ${formatNumber(tree.documents.length)} documents in ${formatNumber(tree.children.length)} sections, ${formatNumber(totals.chunks)} chunks. The structure tree and the Documents tab list the same data.`}
+          aria-label={`${mode === "3d" ? "3D map" : "Map"} of the archive: ${formatNumber(tree.documents.length)} documents in ${formatNumber(tree.children.length)} sections, ${formatNumber(totals.chunks)} chunks. The structure tree and the Documents tab list the same data.`}
           className={hovered ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"}
           onContextMenu={(e) => e.preventDefault()}
           onPointerDown={(e) => {
-            drag.current = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false, mode: e.shiftKey || e.button === 2 ? "pan" : "turn" };
+            drag.current = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false, mode: mode === "2d" || e.shiftKey || e.button === 2 ? "pan" : "turn" };
             panVelocity.current = { x: 0, y: 0 };
             spinVelocity.current = { yaw: 0, pitch: 0 };
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -846,7 +964,8 @@ export default function DataMap({
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-ink-2">
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#a3a3a3]" />Section / folder</span>
         <span className="ml-auto text-muted">
-          Circle size = {sizeBy === "chunks" ? "number of chunks" : "file size"} · drag to turn · Shift+drag or right-drag to move · scroll to zoom
+          Circle size = {sizeBy === "chunks" ? "number of chunks" : "file size"} ·{" "}
+          {mode === "3d" ? "drag to turn · Shift+drag or right-drag to move" : "drag to move"} · scroll to zoom
         </span>
       </div>
     </div>
