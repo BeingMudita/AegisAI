@@ -13,6 +13,7 @@ import {
   HardDrive,
   Hash,
   Layers,
+  Network,
   Plus,
   RefreshCw,
   Search,
@@ -25,6 +26,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { statusLabels } from "../components/archive/model";
+import DataMap from "../components/archive/DataMap";
 import VectorPanel from "../components/archive/VectorPanel";
 import {
   buildTree,
@@ -336,7 +338,7 @@ function SortHeader({
 export default function Database() {
   const { user } = useAuth();
   const admin = user?.role === "ADMIN";
-  const archive = useApi<ArchiveDocument[]>("/api/retrieval/archive", 15000);
+  const archive = useApi<ArchiveDocument[]>("/api/retrieval/archive", 30000);
   // Deleted ids stay hidden even if a poll that started before the delete lands afterwards.
   const [gone, setGone] = useState<Set<string>>(new Set());
   const documents = useMemo(() => (archive.data ?? []).filter((d) => !gone.has(d.document_id)), [archive.data, gone]);
@@ -349,7 +351,7 @@ export default function Database() {
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openDoc, setOpenDoc] = useState<string | null>(null);
-  const [tab, setTab] = useState<"documents" | "vectors">("documents");
+  const [tab, setTab] = useState<"documents" | "vectors" | "map">("documents");
   const [vectorId, setVectorId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingDelete | null>(null);
   const [busy, setBusy] = useState(false);
@@ -521,6 +523,7 @@ export default function Database() {
             tabs={[
               { id: "documents" as const, label: "Documents", icon: FileText, count: documents.length },
               { id: "vectors" as const, label: "Vectors", icon: Hash, count: totals.indexed },
+              { id: "map" as const, label: "Map", icon: Network },
             ]}
             value={tab}
             onChange={setTab}
@@ -538,7 +541,26 @@ export default function Database() {
             )}
           </Card>
 
-          {tab === "vectors" ? (
+          {tab === "map" ? (
+            <Card
+              className="reveal"
+              title={scopeTitle}
+              subtitle="Every section, folder and document as a graph. Bigger circles hold more data; document colours show what screening found. Click a folder to focus it, or a document to open its chunks."
+            >
+              <DataMap
+                tree={tree}
+                scopeKey={scope.key}
+                onScope={selectScope}
+                onOpenDocument={(d) => {
+                  setTab("documents");
+                  selectScope(docNodeKey(d));
+                  setQuery(d.title);
+                  setPage(0);
+                  setOpenDoc(d.document_id);
+                }}
+              />
+            </Card>
+          ) : tab === "vectors" ? (
             <VectorPanel
               scope={scope}
               scopeTitle={scopeTitle}

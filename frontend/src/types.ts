@@ -172,8 +172,16 @@ export interface KbStats {
   chunks_quarantined: number;
   sources: string[];
   source_summaries: SourceSummary[];
+  source_count: number;
   memory_bytes: number;
   persisted: boolean;
+}
+
+export interface SourcePage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: SourceSummary[];
 }
 
 export type IngestStage =

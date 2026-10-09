@@ -42,6 +42,7 @@ from app.rag.schemas import (
     QuarantinedChunk,
     RetrievalResult,
     SearchRequest,
+    SourcePage,
 )
 
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
@@ -49,9 +50,32 @@ _COPY_CHUNK = 1024 * 1024
 
 
 @router.get("", response_model=KnowledgeBaseStats)
-def retrieval_status(user: User = Depends(get_current_user)) -> KnowledgeBaseStats:
-    """Knowledge-base status and pipeline counters."""
-    return get_knowledge_base().stats()
+def retrieval_status(
+    include_sources: bool = True, user: User = Depends(get_current_user)
+) -> KnowledgeBaseStats:
+    """Knowledge-base status and pipeline counters. Pollers pass ``include_sources=false``
+    to skip the per-source lists (thousands of entries in a large archive); the
+    paged ``/sources`` endpoint serves them instead."""
+    stats = get_knowledge_base().stats()
+    if include_sources:
+        return stats
+    return stats.model_copy(update={"sources": [], "source_summaries": []})
+
+
+@router.get("/sources", response_model=SourcePage)
+def list_sources(
+    q: str | None = Query(None, max_length=200),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> SourcePage:
+    """Sources with their current trust, lowest trust first; ``q`` matches the name."""
+    items = get_knowledge_base().stats().source_summaries
+    if q:
+        needle = q.casefold()
+        items = [s for s in items if needle in s.source.casefold()]
+    page = items[offset : offset + limit]
+    return SourcePage(total=len(items), offset=offset, limit=limit, items=page)
 
 
 @router.post("/search", response_model=RetrievalResult)
@@ -92,9 +116,14 @@ def organize_document(
 
 
 @router.get("/documents", response_model=list[IngestReport])
-def list_documents(user: User = Depends(require_roles(*STAFF_ROLES))) -> list[IngestReport]:
-    """Every ingested document, newest first."""
-    return get_knowledge_base().documents()
+def list_documents(
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=1000),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> list[IngestReport]:
+    """Ingested documents, newest first (all of them unless ``limit`` is given)."""
+    documents = get_knowledge_base().documents()
+    return documents[offset : offset + limit] if limit else documents[offset:]
 
 
 @router.post("/documents", response_model=IngestReport, status_code=201)
@@ -258,6 +287,11 @@ def cancel_job(job_id: str, user: User = Depends(require_roles(Role.ADMIN))) -> 
 
 
 @router.get("/quarantine", response_model=list[QuarantinedChunk])
-def quarantine(user: User = Depends(require_roles(*STAFF_ROLES))) -> list[QuarantinedChunk]:
-    """Chunks the firewall refused to index."""
-    return get_knowledge_base().quarantine()
+def quarantine(
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1, le=1000),
+    user: User = Depends(require_roles(*STAFF_ROLES)),
+) -> list[QuarantinedChunk]:
+    """Chunks the firewall refused to index (all of them unless ``limit`` is given)."""
+    chunks = get_knowledge_base().quarantine()
+    return chunks[offset : offset + limit] if limit else chunks[offset:]

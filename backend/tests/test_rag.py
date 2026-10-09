@@ -175,3 +175,38 @@ def test_ingest_is_admin_only_and_screens() -> None:
 
     quarantine = client.get("/api/retrieval/quarantine", headers=_h(analyst)).json()
     assert any(q["source"] == "api-test" for q in quarantine)
+
+
+def test_paged_lists_and_light_stats() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    token = client.post(
+        "/api/auth/login", data={"username": "admin", "password": "admin123"}
+    ).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    full = client.get("/api/retrieval", headers=h).json()
+    light = client.get("/api/retrieval?include_sources=false", headers=h).json()
+    assert full["source_count"] == len(full["source_summaries"]) > 0
+    assert light["source_summaries"] == [] and light["sources"] == []
+    assert light["source_count"] == full["source_count"]
+
+    sources = client.get("/api/retrieval/sources?limit=2", headers=h).json()
+    assert sources["total"] == full["source_count"] and len(sources["items"]) == 2
+    name = full["source_summaries"][0]["source"]
+    assert client.get(f"/api/retrieval/sources?q={name[:5]}", headers=h).json()["items"]
+
+    docs = client.get("/api/retrieval/documents", headers=h).json()
+    page = client.get("/api/retrieval/documents?offset=1&limit=2", headers=h).json()
+    assert [d["document_id"] for d in page] == [d["document_id"] for d in docs[1:3]]
+    quarantine = client.get("/api/retrieval/quarantine", headers=h).json()
+    assert client.get("/api/retrieval/quarantine?limit=1", headers=h).json() == quarantine[:1]
+
+    trust = client.get("/api/trust?subject_type=SOURCE&limit=2", headers=h).json()
+    assert len(trust["scores"]) <= 2 and trust["total"] >= len(trust["scores"])
+    everything = client.get("/api/trust", headers=h).json()
+    assert everything["total"] == len(everything["scores"])
+    hits = client.get("/api/trust?q=finance", headers=h).json()
+    assert all("finance" in s["subject_id"].lower() for s in hits["scores"])

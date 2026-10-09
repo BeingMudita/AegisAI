@@ -2,8 +2,6 @@ import {
   ArrowUpRight,
   Binary,
   Check,
-  ChevronLeft,
-  ChevronRight,
   ClipboardPaste,
   Copy,
   Database,
@@ -24,7 +22,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import { api, upload } from "../api";
+import { api, qs, upload } from "../api";
 import { isStaff, useAuth } from "../auth";
 import { PipelineFlow, type Stage } from "../components/pipeline";
 import {
@@ -41,6 +39,7 @@ import {
   formatNumber,
   inputClass,
   trustTone,
+  Pager,
 } from "../components/ui";
 import { useApi } from "../hooks";
 import { ACCEPTED_DOCUMENTS, droppedFiles, selectedFiles, supportedDocument, uploadKey, type UploadSelection } from "../upload-files";
@@ -53,6 +52,7 @@ import type {
   QuarantinedChunk,
   RetrievalResult,
   TrustLevel,
+  SourcePage,
 } from "../types";
 
 const DOC_PAGE = 50;
@@ -511,20 +511,31 @@ export default function KnowledgeBase() {
   const jobs = useApi<IngestJob[]>(staff ? "/api/retrieval/jobs" : null, ingesting ? 1000 : 5000);
   const anyRunning = (jobs.data ?? []).some((j) => !["COMPLETED", "FAILED", "CANCELLED"].includes(j.stage));
   useEffect(() => setIngesting(anyRunning), [anyRunning]);
-  const stats = useApi<KbStats>("/api/retrieval", anyRunning ? 1000 : 5000);
-  const documents = useApi<IngestReport[]>(staff ? "/api/retrieval/documents" : null, anyRunning ? 2000 : 10000);
-  const quarantine = useApi<QuarantinedChunk[]>(staff ? "/api/retrieval/quarantine" : null, anyRunning ? 2000 : 10000);
+  // Stats without the per-source list (thousands of entries); each tab fetches its own
+  // page only while it is open, so an idle page downloads almost nothing.
+  const stats = useApi<KbStats>("/api/retrieval?include_sources=false", anyRunning ? 1000 : 5000);
+  const [docOffset, setDocOffset] = useState(0);
+  const [quarantineOffset, setQuarantineOffset] = useState(0);
+  const [sourceOffset, setSourceOffset] = useState(0);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const documents = useApi<IngestReport[]>(
+    staff && tab === "documents" ? `/api/retrieval/documents?offset=${docOffset}&limit=${DOC_PAGE}` : null,
+    anyRunning ? 3000 : 15000,
+  );
+  const quarantine = useApi<QuarantinedChunk[]>(
+    staff && tab === "quarantine" ? `/api/retrieval/quarantine?offset=${quarantineOffset}&limit=${DOC_PAGE}` : null,
+    anyRunning ? 3000 : 15000,
+  );
+  const sources = useApi<SourcePage>(
+    staff && tab === "sources" ? `/api/retrieval/sources${qs({ q: sourceQuery.trim(), offset: sourceOffset, limit: DOC_PAGE })}` : null,
+    15000,
+  );
 
   const [query, setQuery] = useState("What are the invoice approval thresholds?");
   const [result, setResult] = useState<RetrievalResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openDoc, setOpenDoc] = useState<string | null>(null);
-  // The table draws one page at a time: thousands of rows at once make the tab sluggish.
-  const [docPage, setDocPage] = useState(0);
-  const docRows = documents.data ?? [];
-  const docPages = Math.max(1, Math.ceil(docRows.length / DOC_PAGE));
-  const docCurrent = Math.min(docPage, docPages - 1);
-  const visibleDocs = docRows.slice(docCurrent * DOC_PAGE, (docCurrent + 1) * DOC_PAGE);
+  const visibleDocs = documents.data ?? [];
   const chunks = useApi<DocumentChunkView[]>(openDoc ? `/api/retrieval/documents/${openDoc}/chunks` : null);
 
   const s = stats.data;
@@ -610,19 +621,19 @@ export default function KnowledgeBase() {
       id: "retrieve",
       label: "6 · Guarded retrieval",
       icon: Search,
-      value: `${s?.sources.length ?? 0} sources`,
+      value: `${formatNumber(s?.source_count ?? 0)} sources`,
       detail: "trust-filtered and re-scanned before agents see it",
     },
   ];
 
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
     ...(admin ? [{ id: "add" as const, label: "Add data", icon: UploadCloud }] : []),
-    ...(staff ? [{ id: "documents" as const, label: "Documents", icon: Layers, count: documents.data?.length }] : []),
+    ...(staff ? [{ id: "documents" as const, label: "Documents", icon: Layers, count: s?.documents }] : []),
     { id: "search", label: "Test search", icon: Search },
     ...(staff
-      ? [{ id: "quarantine" as const, label: "Quarantine", icon: ShieldAlert, count: quarantine.data?.length }]
+      ? [{ id: "quarantine" as const, label: "Quarantine", icon: ShieldAlert, count: s?.chunks_quarantined }]
       : []),
-    ...(staff ? [{ id: "sources" as const, label: "Sources", icon: Database, count: s?.source_summaries.length }] : []),
+    ...(staff ? [{ id: "sources" as const, label: "Sources", icon: Database, count: s?.source_count }] : []),
   ];
 
   return (
@@ -686,7 +697,7 @@ export default function KnowledgeBase() {
               </a>
             }
           >
-            {documents.data?.length ? (
+            {visibleDocs.length ? (
               <>
               <div className="-mx-5 overflow-x-auto">
                 <table className="w-full text-sm">
@@ -774,22 +785,7 @@ export default function KnowledgeBase() {
                   </tbody>
                 </table>
               </div>
-              <div className="-mb-1 flex flex-wrap items-center justify-between gap-3 pt-3 text-xs text-muted">
-                <span className="tabular">
-                  Showing {formatNumber(docCurrent * DOC_PAGE + 1)}–{formatNumber(Math.min((docCurrent + 1) * DOC_PAGE, docRows.length))} of {formatNumber(docRows.length)} documents
-                </span>
-                {docPages > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" disabled={docCurrent === 0} onClick={() => { setDocPage(docCurrent - 1); setOpenDoc(null); }} aria-label="Previous page">
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </Button>
-                    <span className="tabular">{docCurrent + 1} / {docPages}</span>
-                    <Button variant="ghost" size="sm" disabled={docCurrent + 1 >= docPages} onClick={() => { setDocPage(docCurrent + 1); setOpenDoc(null); }} aria-label="Next page">
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
-              </div>
+              <Pager offset={docOffset} pageSize={DOC_PAGE} total={s?.documents ?? visibleDocs.length} noun="documents" onChange={(o) => { setDocOffset(o); setOpenDoc(null); }} />
               </>
             ) : (
               <Empty icon={Layers}>No documents yet.</Empty>
@@ -852,6 +848,7 @@ export default function KnowledgeBase() {
             icon={ShieldAlert}
           >
             {quarantine.data?.length ? (
+              <>
               <ul className="space-y-3">
                 {quarantine.data.map((q) => (
                   <li key={q.chunk_id} className="rounded-xl border border-edge p-4">
@@ -871,6 +868,8 @@ export default function KnowledgeBase() {
                   </li>
                 ))}
               </ul>
+              <Pager offset={quarantineOffset} pageSize={DOC_PAGE} total={s?.chunks_quarantined ?? quarantine.data.length} noun="quarantined chunks" onChange={setQuarantineOffset} />
+              </>
             ) : (
               <Empty icon={ShieldCheck}>Nothing quarantined.</Empty>
             )}
@@ -884,6 +883,16 @@ export default function KnowledgeBase() {
             subtitle="A source that serves injected content loses trust; below 0.30 its chunks are no longer retrieved."
             icon={Database}
           >
+            <label className="relative mb-3 block">
+              <span className="sr-only">Search sources</span>
+              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted" />
+              <input
+                className={`${inputClass} pl-9`}
+                placeholder="Search sources…"
+                value={sourceQuery}
+                onChange={(e) => { setSourceQuery(e.target.value); setSourceOffset(0); }}
+              />
+            </label>
             <div className="-mx-5 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -896,7 +905,7 @@ export default function KnowledgeBase() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(s?.source_summaries ?? []).map((src) => (
+                  {(sources.data?.items ?? []).map((src) => (
                     <tr key={src.source} className="border-b border-edge">
                       <td className="px-5 py-2.5 font-medium">{src.source}</td>
                       <td className="px-3 py-2.5">
@@ -920,6 +929,8 @@ export default function KnowledgeBase() {
                 </tbody>
               </table>
             </div>
+            {sources.data && sources.data.total === 0 && <Empty icon={Search}>No source matches “{sourceQuery}”.</Empty>}
+            <Pager offset={sourceOffset} pageSize={DOC_PAGE} total={sources.data?.total ?? 0} noun="sources" onChange={setSourceOffset} />
           </Card>
         )}
       </div>

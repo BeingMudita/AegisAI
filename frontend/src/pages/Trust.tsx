@@ -1,11 +1,13 @@
 import { useState } from "react";
 
-import { api } from "../api";
+import { api, qs } from "../api";
 import { useAuth } from "../auth";
 import { ChartCard, TrustLine } from "../components/charts";
-import { Badge, Button, Card, Empty, ErrorNote, Meter, PageHeader, inputClass, trustTone } from "../components/ui";
+import { Badge, Button, Card, Empty, ErrorNote, Meter, PageHeader, Pager, inputClass, trustTone } from "../components/ui";
 import { formatTime, useApi } from "../hooks";
 import type { SubjectType, TrustDetail, TrustScore } from "../types";
+
+const PAGE = 50;
 
 /** "FinanceAgent@admin" is FinanceAgent's trust while acting for admin (per-user trust). */
 function subjectLabel(type: SubjectType, id: string) {
@@ -20,7 +22,14 @@ function subjectLabel(type: SubjectType, id: string) {
 
 export default function Trust() {
   const { user } = useAuth();
-  const list = useApi<{ scores: TrustScore[]; threshold: number }>("/api/trust", 4000);
+  // One page of the registry at a time: a large archive has thousands of sources.
+  const [offset, setOffset] = useState(0);
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState<SubjectType | "">("");
+  const list = useApi<{ scores: TrustScore[]; threshold: number; total: number }>(
+    `/api/trust${qs({ subject_type: type, q: query.trim(), offset, limit: PAGE })}`,
+    10000,
+  );
   const [selected, setSelected] = useState<{ type: SubjectType; id: string } | null>(null);
   const detail = useApi<TrustDetail>(
     selected ? `/api/trust/${selected.type}/${encodeURIComponent(selected.id)}` : null,
@@ -68,6 +77,26 @@ export default function Trust() {
         title="Trust registry"
         subtitle={`Lowest first · default threshold ${threshold.toFixed(2)} · select a row for its history`}
       >
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <label className="relative min-w-[200px] flex-1">
+            <span className="sr-only">Search subjects</span>
+            <input
+              className={inputClass}
+              placeholder="Search agents, sources and tools…"
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setOffset(0); }}
+            />
+          </label>
+          <div className="shrink-0">
+            <label className="sr-only" htmlFor="trust-type">Subject type</label>
+            <select id="trust-type" className={`${inputClass} py-2 pr-8`} value={type} onChange={(e) => { setType(e.target.value as SubjectType | ""); setOffset(0); }}>
+              <option value="">All subjects</option>
+              <option value="AGENT">Agents</option>
+              <option value="SOURCE">Sources</option>
+              <option value="TOOL">Tools</option>
+            </select>
+          </div>
+        </div>
         {scores.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -115,8 +144,9 @@ export default function Trust() {
             </table>
           </div>
         ) : (
-          <Empty>No trust records yet — they appear as agents act and sources are ingested.</Empty>
+          <Empty>{query || type ? "Nothing matches this search." : "No trust records yet — they appear as agents act and sources are ingested."}</Empty>
         )}
+        <Pager offset={offset} pageSize={PAGE} total={list.data?.total ?? 0} noun="subjects" onChange={setOffset} />
       </Card>
 
       {selected && detail.data && (

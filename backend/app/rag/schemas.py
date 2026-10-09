@@ -242,6 +242,13 @@ class ReviewResult(BaseModel):
     missing: list[str]
 
 
+class SourcePage(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[SourceSummary]
+
+
 class DeleteDocumentsRequest(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=1000)
 
@@ -332,5 +339,6 @@ class KnowledgeBaseStats(BaseModel):
     chunks_quarantined: int
     sources: list[str]
     source_summaries: list[SourceSummary] = Field(default_factory=list)
+    source_count: int = 0
     memory_bytes: int = 0
     persisted: bool = False

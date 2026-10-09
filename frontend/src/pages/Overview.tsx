@@ -11,7 +11,7 @@ export default function Overview() {
   const staff = isStaff(user);
   const summary = useApi<TelemetrySummary>(staff ? "/api/security-events/summary" : null, 5000);
   const agents = useApi<AgentInfo[]>("/api/agents", 5000);
-  const kb = useApi<KbStats>("/api/retrieval", 10000);
+  const kb = useApi<KbStats>("/api/retrieval?include_sources=false", 10000);
   const recent = useApi<{ events: SecurityEvent[] }>(staff ? "/api/security-events?limit=5" : null, 5000);
   const data = summary.data;
   const error = agents.error ?? kb.error ?? summary.error ?? recent.error;

@@ -564,6 +564,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
             chunks_quarantined=quarantined,
             sources=[s.source for s in summaries],
             source_summaries=summaries,
+            source_count=len(summaries),
             memory_bytes=self.store.memory_bytes(),
             persisted=True,
         )

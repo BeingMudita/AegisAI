@@ -37,7 +37,7 @@ function LocationForm({ document, onSaved }: { document: ArchiveDocument; onSave
 
 export default function ArchiveExplorer() {
   const { user } = useAuth();
-  const archive = useApi<ArchiveDocument[]>("/api/retrieval/archive", 10000);
+  const archive = useApi<ArchiveDocument[]>("/api/retrieval/archive", 30000);
   // Where we are in the same section → folder → subfolder tree the Database page shows.
   const [nodeKey, setNodeKey] = useState("");
   // A folder holding both subfolders and its own files lists the files as one extra layer.

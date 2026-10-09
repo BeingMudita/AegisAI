@@ -732,6 +732,7 @@ class KnowledgeBase:
             chunks_quarantined=quarantined,
             sources=[s.source for s in summaries],
             source_summaries=summaries,
+            source_count=len(summaries),
             memory_bytes=self.store.memory_bytes(),
             persisted=self.persist_dir is not None,
         )
