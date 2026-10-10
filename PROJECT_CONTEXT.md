@@ -323,7 +323,11 @@ Without Ollama the agents use the rule-based planner automatically.
 
 Rules were tuned on the dev set and the semantic layer trained on it (optimistic); held-out sets
 (`firewall_holdout.yaml`, `firewall_holdout_v2.yaml`) are never tuned on. Semantic layer (Phase
-12) lifted held-out v2 recall 27%→61%. CI gate (`backend/tests/test_evaluation.py`) fails below
+12) lifted held-out v2 recall 27%→61%; Phase 12.1 — intent-abstraction features
+(`firewall/lexicon.py`) + deterministic adversarial augmentation (`firewall/adversarial.py`,
+trains weights only, metrics still measured on real dev cases) — lifted it further to **82%** at
+0% semantic false positives, honestly (a 5-gram leakage guard, `assert_disjoint_from`, keeps the
+held-out set out of training). CI gate (`backend/tests/test_evaluation.py`) fails below
 90% dev recall/precision, >10% FP, any benign blocked, or any scenario failing. See
 [`evaluation/README.md`](evaluation/README.md) and [`attack-scenarios/README.md`](attack-scenarios/README.md).
 
@@ -345,6 +349,7 @@ Rules were tuned on the dev set and the semantic layer trained on it (optimistic
 | 10 | Retention & quotas: audit retention, session expiry, keyset pagination, per-principal turn/token/cost budgets (closes LLM10) |
 | 11 | Assurance: human approval workflow, red-team lab, OWASP/ATLAS threat coverage, threat model |
 | 12 | Paraphrase dev set + learned semantic injection layer (held-out v2 recall 27→61%) |
+| 12.1 | Generalisation: intent-abstraction features + adversarial augmentation (held-out v2 recall 61→82%, 0% semantic FP; no-leakage 5-gram guard) |
 | 13 | Supply chain: CycloneDX SBOMs + AI-BOM, Trivy scans, SHA-pinned CI, model provenance (closes LLM03) |
 | + | **Developer platform** (SDK, `/v1/secure`, CLI, `aegis.yaml`), **Scanner core**, **Aegis Event Protocol + integration proxy**, **Agent Registry / Runtime Adaptive Security / Autopilot / Security Gate / GitHub Action**, **Threat Intelligence Engine**, **Attack-surface/blast-radius** (added early–mid Oct 2026) |
 
@@ -373,8 +378,9 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 ---
 
 ## 17. Future work / roadmap
-- **Generalisation:** improve the semantic firewall + adversarial training to lift held-out recall
-  (~45% → 80%+).
+- **Generalisation:** ✅ done in Phase 12.1 — intent-abstraction features + adversarial augmentation
+  lifted held-out v2 recall to 82% (combined held-out 80%), from ~45%. Next: an *independent* held-out
+  set from an outside red team (current held-out shares an author), and non-linear / embedding features.
 - **Standards:** complete OWASP LLM Top 10 + broaden MITRE ATLAS, with automated residual-risk reports.
 - **Multi-agent & tools:** policy-aware gateway for multi-agent workflows; expanded tool/plugin registry.
 - **Production hardening:** managed deployment, SIEM/observability export, verified performance under load.
@@ -436,6 +442,7 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 ## 21. Context update log (append newest at top)
 | Date | Change |
 |---|---|
+| 2026-10-10 | **Phase 12.1 — semantic-firewall generalisation.** Added intent-abstraction features (`backend/app/firewall/lexicon.py`, `semantic_features.py`; `FEATURE_VERSION`→2) and deterministic adversarial augmentation (`backend/app/firewall/adversarial.py`, trains weights only; threshold/metrics on real dev cases via `out_of_fold_probabilities(extra=…)`). Honest held-out v2 recall 61%→82% at 0% semantic FP; combined held-out ~80%. Enforced a no-test-leakage 5-gram guard (`assert_disjoint_from`, `tests/test_adversarial.py`) after catching held-out phrasings in an early draft. Retrained `semantic_model.json`; docs updated (CHANGELOG, evaluation/README). |
 | 2026-10-10 | **Created this file.** Captured full project context to end of Phase 13 + the platform/integration/DevSecOps/threat-intel/attack-graph additions. Also generated the 14-page Mid-Term 2 report (`AegisAI_MidTerm2_Report.docx`). |
 
 <!-- Add a new row above for each significant change. See the MAINTENANCE PROTOCOL in §0. -->
