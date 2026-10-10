@@ -59,8 +59,8 @@ from app.firewall.scanner import PromptFirewall, get_firewall
 from app.firewall.schemas import ContentChannel, FirewallAction
 from app.policies.config import GlobalPolicyConfig, ToolPolicy, get_global_config
 from app.policies.engine import PolicyEngine
-from app.policies.store import get_policy
 from app.telemetry.store import get_audit_log
+from app.tenants.store import effective_engine
 from app.tools.adapters import LIVE_ADAPTERS, SIDE_EFFECTING, RunFn
 from app.tools.sandbox import IMPLEMENTATIONS, OUTBOX, ToolContext, ToolImpl
 from app.tools.schemas import CheckResult, ToolCallResult, ToolInfo
@@ -174,11 +174,11 @@ class ToolGateway:
         return out
 
     def available_tools(self, agent: str) -> list[ToolInfo]:
-        """Tools the agent's policy allows and that are globally enabled."""
-        policy = get_policy(agent)
-        if policy is None:
+        """Tools the agent's effective (tenant-composed) policy allows and that are
+        globally enabled."""
+        engine = effective_engine(agent)
+        if engine is None:
             return []
-        engine = PolicyEngine(policy)
         return [t for t in self.describe() if t.enabled and engine.can_use_tool(t.name).allowed]
 
     def requests(self, *, agent: str | None = None, limit: int = 100) -> list[ToolCallResult]:
@@ -481,16 +481,17 @@ class ToolGateway:
             )
         )
 
-        # 2. agent policy
-        policy = get_policy(agent)
-        if policy is None:
+        # 2. agent policy — the effective policy, i.e. the agent's own folded into
+        #    its tenant's guardrails (deny/allow-list, domains, sensitive data).
+        engine = effective_engine(agent)
+        if engine is None:
             raise _Denied(
                 "policy",
                 f"No policy exists for agent '{agent}'.",
                 severity=SecuritySeverity.HIGH,
                 signal=None,
             )
-        engine = PolicyEngine(policy)
+        policy = engine.policy
         decision = engine.can_use_tool(tool)
         get_audit_log().log_decision(
             "policy", allowed=decision.allowed, subject=tool, agent=agent, reason=decision.reason

@@ -14,6 +14,7 @@ from app.api.routes import (
     compliance,
     firewall,
     gate,
+    orchestration,
     policies,
     redteam,
     registry,
@@ -22,6 +23,7 @@ from app.api.routes import (
     security_events,
     sessions,
     supply_chain,
+    tenants,
     threatintel,
     tools,
     trust,
@@ -53,3 +55,5 @@ api_router.include_router(autopilot.router)
 api_router.include_router(attack_surface.router)
 api_router.include_router(threatintel.router)
 api_router.include_router(vectors.router)
+api_router.include_router(tenants.router)
+api_router.include_router(orchestration.router)

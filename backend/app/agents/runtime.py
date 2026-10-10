@@ -30,13 +30,12 @@ from app.firewall.dlp import redact
 from app.firewall.scanner import PromptFirewall, get_firewall
 from app.firewall.schemas import ContentChannel, FirewallAction
 from app.policies.config import get_global_config
-from app.policies.engine import PolicyEngine
-from app.policies.store import get_policy
 from app.quotas.service import QuotaService, get_quota_service
 from app.quotas.usage import metering
 from app.rag.knowledge_base import KnowledgeBase, get_knowledge_base
 from app.rag.schemas import DroppedChunk, RetrievedChunk
 from app.telemetry.store import get_audit_log
+from app.tenants.store import effective_engine, effective_policy
 from app.tools.gateway import ToolGateway, get_tool_gateway
 from app.tools.schemas import ToolCallResult
 from app.trust.engine import TrustEngine, get_trust_engine
@@ -244,8 +243,8 @@ class AgentRuntime:
                     ),
                 )
             }
-        policy = get_policy(agent)
-        if policy is None or not PolicyEngine(policy).can_use_tool("search_documents").allowed:
+        engine = effective_engine(agent)
+        if engine is None or not engine.can_use_tool("search_documents").allowed:
             return {
                 "trace": self._trace(
                     state,
@@ -378,7 +377,7 @@ class AgentRuntime:
 
     def guard_output(self, state: AgentState) -> AgentState:
         agent, answer = state["agent"], state.get("answer", "")
-        policy = get_policy(agent)
+        policy = effective_policy(agent)
         dlp = redact(answer, pii=bool(policy and policy.sensitive_data))
         answer = dlp.text
 

@@ -15,10 +15,11 @@ from sqlalchemy.dialects.postgresql import insert
 from app.auth.roles import Role
 from app.auth.security import hash_password
 from app.config import get_settings
-from app.database.models import Agent, Policy, ToolDefinition, User
+from app.database.models import Agent, Policy, Tenant, ToolDefinition, User
 from app.database.sync import transaction
 from app.policies.config import get_global_config
 from app.policies.store import example_policies
+from app.tenants.schemas import DEFAULT_TENANT
 
 _SEED_LOCK = 0x5EED_A1E5
 
@@ -33,13 +34,33 @@ def seed_reference_data() -> None:
     with transaction() as db:
         db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SEED_LOCK})
 
+        # The default tenant owns every seeded user and agent (migration 0006 creates
+        # it; create it here too so seeding a fresh in-test database is self-contained).
+        default_tid = db.scalar(select(Tenant.id).where(Tenant.slug == DEFAULT_TENANT))
+        if default_tid is None:
+            tenant = Tenant(slug=DEFAULT_TENANT, name="Default organisation", policy={})
+            db.add(tenant)
+            db.flush()
+            default_tid = tenant.id
+
         existing = set(db.scalars(select(User.username)))
         for username, password, role in accounts:
             if username not in existing:  # hash only what's missing (bcrypt is slow)
-                db.add(User(username=username, hashed_password=hash_password(password), role=role))
+                db.add(
+                    User(
+                        username=username,
+                        hashed_password=hash_password(password),
+                        role=role,
+                        tenant_id=default_tid,
+                    )
+                )
 
         for policy in example_policies():
-            db.execute(insert(Agent).values(name=policy.agent).on_conflict_do_nothing())
+            db.execute(
+                insert(Agent)
+                .values(name=policy.agent, tenant_id=default_tid)
+                .on_conflict_do_nothing()
+            )
             agent_id = db.scalar(select(Agent.id).where(Agent.name == policy.agent))
             has_policy = db.scalar(
                 select(Policy.id).where((Policy.agent_id == agent_id) & Policy.is_active)

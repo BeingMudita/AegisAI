@@ -144,6 +144,8 @@ AegisAI/
 │   │   ├── firewall/       # normalize.py, rules.py, scanner, DLP, semantic layer
 │   │   ├── trust/          # engine.py, scoring.py (trust signals incl. BEHAVIORAL_ANOMALY)
 │   │   ├── policies/       # per-agent policies, global tool registry, policy engine
+│   │   ├── tenants/        # organisations, tenant policy, composition (effective policy)
+│   │   ├── orchestration/  # multi-agent delegation (tenant-scoped, composed policy)
 │   │   ├── tools/          # zero-trust gateway, approval queue, sandbox + live adapters (adapters.py)
 │   │   ├── rag/            # chunking, embeddings, guarded knowledge_base, seed corpus
 │   │   ├── redteam/        # attack-suite runner + background run service
@@ -351,6 +353,7 @@ held-out set out of training). CI gate (`backend/tests/test_evaluation.py`) fail
 | 12 | Paraphrase dev set + learned semantic injection layer (held-out v2 recall 27→61%) |
 | 12.1 | Generalisation: intent-abstraction features + adversarial augmentation (held-out v2 recall 61→82%, 0% semantic FP; no-leakage 5-gram guard) |
 | 13 | Supply chain: CycloneDX SBOMs + AI-BOM, Trivy scans, SHA-pinned CI, model provenance (closes LLM03) |
+| 14 | **Multi-agent orchestration + tenant isolation**: tenants with most-restrictive-wins composed policy, agent→agent delegation (same-tenant, depth-limited), scoped listings; memory + Postgres (migration `0006`) |
 | + | **Developer platform** (SDK, `/v1/secure`, CLI, `aegis.yaml`), **Scanner core**, **Aegis Event Protocol + integration proxy**, **Agent Registry / Runtime Adaptive Security / Autopilot / Security Gate / GitHub Action**, **Threat Intelligence Engine**, **Attack-surface/blast-radius** (added early–mid Oct 2026) |
 
 ---
@@ -375,7 +378,9 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 - OWASP **LLM04 / LLM08 / LLM09 remain partial** (retrieval-only poisoning defence; no independent
   fact verification).
 - In-memory backend resets on restart; durable multi-worker state needs PostgreSQL.
-- No **organisation identity** (SSO/OIDC), tenant isolation, or per-user delegated permissions yet.
+- **Tenant isolation** scopes agents, policies and delegation by organisation (membership on
+  `agents.tenant_id` / `users.tenant_id`); peripheral-table reads (events, tool requests, sessions)
+  are not yet tenant-filtered in every endpoint. No **SSO/OIDC** or per-user delegated permissions yet.
 
 ---
 
@@ -384,14 +389,16 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
   lifted held-out v2 recall to 82% (combined held-out 80%), from ~45%. Next: an *independent* held-out
   set from an outside red team (current held-out shares an author), and non-linear / embedding features.
 - **Standards:** complete OWASP LLM Top 10 + broaden MITRE ATLAS, with automated residual-risk reports.
-- **Multi-agent & tools:** policy-aware gateway for multi-agent workflows; expanded tool/plugin registry.
+- **Multi-agent & tools:** ✅ core done — tenant-composed policy + agent→agent delegation
+  (`app/orchestration/`). Next: multi-hop task routing/planning across agents, and an expanded tool/plugin registry.
 - **Production hardening:** managed deployment, SIEM/observability export, verified performance under load.
 - **Autonomous red-teaming:** risk-guided fuzzing feeding new signatures back into the firewall.
 - **Model-agnostic brains:** pluggable local + hosted LLM backends with per-model trust calibration.
 - **Real tool adapters:** ✅ done — non-sandboxed HTTP/SMTP/upload/shell adapters behind the approval
   workflow (`TOOL_EXECUTION_MODE=live`, side effects only after approval). Next: more adapters (DB writes,
   ticketing), per-adapter credential scoping, and an MCP security proxy in front of external tool servers.
-- **Identity:** SSO/OIDC, tenant isolation, per-user delegated permissions.
+- **Identity:** ✅ tenant isolation done (organisation boundary scoping agents/policies/delegation).
+  Next: SSO/OIDC and per-user delegated permissions, and full tenant-scoping of every telemetry endpoint.
 
 ---
 
@@ -447,6 +454,7 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 ## 21. Context update log (append newest at top)
 | Date | Change |
 |---|---|
+| 2026-10-10 | **Multi-agent orchestration + tenant isolation.** New `app/tenants/` (Tenant + TenantPolicy, memory `TenantStore` + `app/persistence/tenants.py` Postgres store, `compose_policy` most-restrictive-wins) and `app/orchestration/` (delegation: same-tenant + depth + caller-standing, then runs the tool as the callee through the gateway). Gateway/runtime now enforce the **effective** (tenant-composed) policy via `effective_engine`/`effective_policy`. `GET /api/agents` scoped; new `/api/tenants` + `/api/orchestration/delegate`. Migration `0006` (tenants table, `tenant_id` on users/agents, default-tenant backfill); seed + conftest updated. Tests: `test_tenants.py`, `test_orchestration.py`. Memory 383 pass/15 skip, Postgres 398 pass. No new deps. |
 | 2026-10-10 | **Real tool adapters behind approval.** Added `backend/app/tools/adapters.py` (stdlib HTTP/SMTP/upload/shell adapters). Gateway selects sandbox vs live by `TOOL_EXECUTION_MODE` (default sandbox) and adds an `execution` checkpoint: side-effecting adapters run live only after approval, shell only if `TOOL_SHELL_ENABLE`; misconfig fails safe. New settings (`TOOL_*`, `SMTP_*`), `ToolInfo.live_capable`, `tests/test_tool_adapters.py`. No new deps. Docs: CHANGELOG, .env.example, default_policies.yaml. |
 | 2026-10-10 | **Phase 12.1 — semantic-firewall generalisation.** Added intent-abstraction features (`backend/app/firewall/lexicon.py`, `semantic_features.py`; `FEATURE_VERSION`→2) and deterministic adversarial augmentation (`backend/app/firewall/adversarial.py`, trains weights only; threshold/metrics on real dev cases via `out_of_fold_probabilities(extra=…)`). Honest held-out v2 recall 61%→82% at 0% semantic FP; combined held-out ~80%. Enforced a no-test-leakage 5-gram guard (`assert_disjoint_from`, `tests/test_adversarial.py`) after catching held-out phrasings in an early draft. Retrained `semantic_model.json`; docs updated (CHANGELOG, evaluation/README). |
 | 2026-10-10 | **Created this file.** Captured full project context to end of Phase 13 + the platform/integration/DevSecOps/threat-intel/attack-graph additions. Also generated the 14-page Mid-Term 2 report (`AegisAI_MidTerm2_Report.docx`). |

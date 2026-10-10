@@ -27,6 +27,18 @@ from app.database.base import Base, TimestampMixin, uuid_pk
 from app.database.enums import AgentStatus, SessionStatus
 
 
+class Tenant(Base, TimestampMixin):
+    """An organisation boundary. Its ``policy`` (a serialised TenantPolicy) composes
+    with each member agent's policy; users and agents see only their own tenant."""
+
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    slug: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    policy: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
 class User(Base, TimestampMixin):
     __tablename__ = "users"
 
@@ -35,6 +47,9 @@ class User(Base, TimestampMixin):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(Enum(Role, name="user_role"), default=Role.AGENT)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     agents: Mapped[list["Agent"]] = relationship(back_populates="owner")
 
@@ -51,6 +66,9 @@ class Agent(Base, TimestampMixin):
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     owner: Mapped["User | None"] = relationship(back_populates="agents")

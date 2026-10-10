@@ -28,6 +28,8 @@ class User(BaseModel):
     username: str
     role: Role
     disabled: bool = False
+    # The tenant (organisation) this user belongs to; isolation is scoped to it.
+    tenant: str = "default"
 
 
 class UserInDB(User):

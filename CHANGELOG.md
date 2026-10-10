@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-10-10 — Multi-agent policy orchestration and tenant isolation
+
+Agents now live inside **tenants** (organisations), and one agent can **delegate**
+an action to another under composed policy. Both backends (memory and Postgres)
+are supported.
+
+- **Tenant model** (`backend/app/tenants/`). A tenant is an isolation boundary with
+  its own `TenantPolicy`. Every agent and user belongs to one; `tenant_id` columns on
+  `agents` / `users` are authoritative (migration `0006`, with a seeded `default`
+  tenant and backfill). `TenantStore` (memory) and `PostgresTenantStore` share one
+  interface.
+- **Policy composition** (`tenants/composition.py`). The effective policy an agent is
+  held to is its own folded into its tenant's, most-restrictive-wins: a tool must be
+  allowed by both and denied by neither; a domain must sit within the tenant's
+  allow-list; sensitive-data categories are unioned. The result is a plain
+  `AgentPolicy`, so the existing `PolicyEngine` enforces it unchanged — no new code
+  path. The gateway and the agent runtime now evaluate the **effective** policy
+  (`effective_engine` / `effective_policy`).
+- **Isolation.** Callers see only their own tenant's agents (`GET /api/agents` is
+  scoped); a user's tenant is resolved from the store on every request, so a
+  reassignment takes effect without re-issuing the token.
+- **Multi-agent orchestration** (`backend/app/orchestration/`). `POST /api/orchestration/delegate`
+  (ADMIN): one agent asks another to run a tool. The orchestrator enforces the
+  *delegation* — same tenant only, within the tenant's `max_delegation_depth`, caller
+  not suspended — then runs the tool **as the callee** through the ordinary gateway, so
+  the callee's effective policy, trust, DLP, firewall and approval all apply. No
+  security logic is duplicated.
+- **Tenant management API** (`/api/tenants`): read your own tenant; ADMIN can list, create,
+  set policy, and move agents/users between tenants.
+- **Tests.** `test_tenants.py` (composition + isolation + store) and `test_orchestration.py`
+  (same-tenant delegation, cross-tenant denial, tenant-policy denial through the gateway,
+  depth limit, scoped listing, the API). The Postgres migration-matches-models check
+  covers `0006`. Memory: 383 passed / 15 skipped; Postgres: 398 passed.
+- No new runtime dependencies.
+
 ## 2026-10-10 — Real tool adapters behind the approval workflow
 
 Until now every tool was a sandbox simulation — the point of the project was the

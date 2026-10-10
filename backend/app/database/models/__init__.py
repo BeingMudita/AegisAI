@@ -9,6 +9,7 @@ from app.database.models.core import (
     AgentTurnRow,
     Policy,
     SessionRun,
+    Tenant,
     User,
 )
 from app.database.models.documents import (
@@ -32,6 +33,7 @@ from app.database.models.security import (
 
 __all__ = [
     "Base",
+    "Tenant",
     "User",
     "Agent",
     "Policy",

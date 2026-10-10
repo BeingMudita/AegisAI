@@ -53,6 +53,7 @@ from app.policies.store import clear_policy_cache  # noqa: E402
 from app.quotas.store import get_budget_store  # noqa: E402
 from app.redteam.service import get_redteam_service  # noqa: E402
 from app.telemetry.store import get_audit_log  # noqa: E402
+from app.tenants.store import get_tenant_store  # noqa: E402
 from app.tools.gateway import get_tool_gateway  # noqa: E402
 from app.tools.sandbox import OUTBOX  # noqa: E402
 from app.trust.engine import get_trust_engine  # noqa: E402
@@ -73,6 +74,7 @@ def _clear() -> None:
     get_budget_store().clear()
     get_adaptive_monitor().clear()
     get_threat_intel().clear()
+    get_tenant_store().clear()
     OUTBOX.clear()
 
 

@@ -36,7 +36,12 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     if user is None or user.disabled:
         raise _credentials_exc
 
-    return User(username=user.username, role=user.role, disabled=user.disabled)
+    # Tenant membership is authoritative in the tenant store, so a reassignment
+    # takes effect on the next request without re-issuing the token.
+    from app.tenants.store import get_tenant_store
+
+    tenant = get_tenant_store().tenant_of_user(user.username)
+    return User(username=user.username, role=user.role, disabled=user.disabled, tenant=tenant)
 
 
 def require_roles(*allowed: Role) -> Callable[[User], User]:
