@@ -134,6 +134,27 @@ class Settings(BaseSettings):
     # Human approval: a queued high-risk tool call expires if nobody decides in time.
     approval_ttl_minutes: int = 60
 
+    # Real tool execution. "sandbox" (default) simulates every tool, so tests,
+    # demos and red-team runs have no real-world effect. "live" uses the real
+    # adapters in `app.tools.adapters` — but a side-effecting action (send_email,
+    # external_upload, shell) only ever runs after a human approves the call;
+    # the gateway refuses to run one live unless its policy is requires_approval.
+    tool_execution_mode: str = "sandbox"  # sandbox | live
+    # The live shell adapter runs arbitrary commands and is the highest-risk tool.
+    # Even in live mode it stays off unless this is set (and the call is approved).
+    tool_shell_enable: bool = False
+    # Timeout and response cap for the live web_fetch / external_upload adapters.
+    tool_http_timeout_seconds: float = 10.0
+    tool_http_max_bytes: int = 1_000_000
+    # SMTP for the live send_email adapter. Unset host ⇒ the adapter reports it is
+    # not configured (the call FAILS cleanly) instead of pretending to send.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+
     # Developer platform (SDK / REST gateway / CLI)
     # Optional shared key external apps send as `X-Aegis-Key` to the /v1/secure/*
     # gateway. When unset, the gateway accepts a valid JWT, and is open in a
@@ -170,6 +191,11 @@ class Settings(BaseSettings):
     @property
     def use_postgres(self) -> bool:
         return self.storage_backend.lower() == "postgres"
+
+    @property
+    def use_live_tools(self) -> bool:
+        """True when real tool adapters run (sandbox otherwise)."""
+        return self.tool_execution_mode.lower() == "live"
 
     @property
     def sync_database_url(self) -> str:

@@ -144,7 +144,7 @@ AegisAI/
 │   │   ├── firewall/       # normalize.py, rules.py, scanner, DLP, semantic layer
 │   │   ├── trust/          # engine.py, scoring.py (trust signals incl. BEHAVIORAL_ANOMALY)
 │   │   ├── policies/       # per-agent policies, global tool registry, policy engine
-│   │   ├── tools/          # sandboxed tools, zero-trust gateway, approval queue, sandbox
+│   │   ├── tools/          # zero-trust gateway, approval queue, sandbox + live adapters (adapters.py)
 │   │   ├── rag/            # chunking, embeddings, guarded knowledge_base, seed corpus
 │   │   ├── redteam/        # attack-suite runner + background run service
 │   │   ├── compliance/     # catalog.py: OWASP LLM Top 10 / MITRE ATLAS + live evidence
@@ -369,7 +369,9 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 ## 16. Known limitations & residual risk
 - ~4 in 10 **paraphrased** attacks still bypass the firewall's signature rules → the
   **deny-by-default gateway, not the firewall, is the primary control**.
-- Tools are **sandboxed simulations** (no real email/shell/network side effects yet).
+- Tools are **sandboxed simulations by default**; real adapters (HTTP, SMTP, upload, shell) exist
+  behind `TOOL_EXECUTION_MODE=live` and run a real side effect only after human approval
+  (`app/tools/adapters.py`). Live SMTP/upload endpoints and the shell flag must be configured to use them.
 - OWASP **LLM04 / LLM08 / LLM09 remain partial** (retrieval-only poisoning defence; no independent
   fact verification).
 - In-memory backend resets on restart; durable multi-worker state needs PostgreSQL.
@@ -386,7 +388,10 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 - **Production hardening:** managed deployment, SIEM/observability export, verified performance under load.
 - **Autonomous red-teaming:** risk-guided fuzzing feeding new signatures back into the firewall.
 - **Model-agnostic brains:** pluggable local + hosted LLM backends with per-model trust calibration.
-- **Identity:** SSO/OIDC, tenant isolation, per-user delegated permissions, real tool adapters behind approval.
+- **Real tool adapters:** ✅ done — non-sandboxed HTTP/SMTP/upload/shell adapters behind the approval
+  workflow (`TOOL_EXECUTION_MODE=live`, side effects only after approval). Next: more adapters (DB writes,
+  ticketing), per-adapter credential scoping, and an MCP security proxy in front of external tool servers.
+- **Identity:** SSO/OIDC, tenant isolation, per-user delegated permissions.
 
 ---
 
@@ -442,6 +447,7 @@ collective defence (threat intel, attack graph); supply-chain assurance. OWASP L
 ## 21. Context update log (append newest at top)
 | Date | Change |
 |---|---|
+| 2026-10-10 | **Real tool adapters behind approval.** Added `backend/app/tools/adapters.py` (stdlib HTTP/SMTP/upload/shell adapters). Gateway selects sandbox vs live by `TOOL_EXECUTION_MODE` (default sandbox) and adds an `execution` checkpoint: side-effecting adapters run live only after approval, shell only if `TOOL_SHELL_ENABLE`; misconfig fails safe. New settings (`TOOL_*`, `SMTP_*`), `ToolInfo.live_capable`, `tests/test_tool_adapters.py`. No new deps. Docs: CHANGELOG, .env.example, default_policies.yaml. |
 | 2026-10-10 | **Phase 12.1 — semantic-firewall generalisation.** Added intent-abstraction features (`backend/app/firewall/lexicon.py`, `semantic_features.py`; `FEATURE_VERSION`→2) and deterministic adversarial augmentation (`backend/app/firewall/adversarial.py`, trains weights only; threshold/metrics on real dev cases via `out_of_fold_probabilities(extra=…)`). Honest held-out v2 recall 61%→82% at 0% semantic FP; combined held-out ~80%. Enforced a no-test-leakage 5-gram guard (`assert_disjoint_from`, `tests/test_adversarial.py`) after catching held-out phrasings in an early draft. Retrained `semantic_model.json`; docs updated (CHANGELOG, evaluation/README). |
 | 2026-10-10 | **Created this file.** Captured full project context to end of Phase 13 + the platform/integration/DevSecOps/threat-intel/attack-graph additions. Also generated the 14-page Mid-Term 2 report (`AegisAI_MidTerm2_Report.docx`). |
 

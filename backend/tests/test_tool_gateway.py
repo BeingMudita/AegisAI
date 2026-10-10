@@ -51,6 +51,7 @@ def test_allowed_call_executes_and_redacts_pii() -> None:
         "firewall",
         "trust",
         "rate_limit",
+        "execution",
         "output",
         "dlp",
     ]

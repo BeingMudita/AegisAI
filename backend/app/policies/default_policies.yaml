@@ -18,6 +18,11 @@ defaults:
 # agent policy. `min_trust` is the agent trust score needed to call the tool.
 # `requires_approval: true` holds the call for a human decision after every
 # automatic check has passed (re-checked again at approval time).
+#
+# Execution is sandboxed (simulated) unless TOOL_EXECUTION_MODE=live. In live
+# mode the real adapters (app/tools/adapters.py) run, but a side-effecting one
+# (send_email, external_upload, shell) runs only after approval — so to use a
+# real egress tool, set it `allowed: true` AND `requires_approval: true`.
 tools:
   - name: search_documents
     description: Semantic search over the company knowledge base.

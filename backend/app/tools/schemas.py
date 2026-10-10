@@ -25,7 +25,9 @@ class ToolCallRequest(BaseModel):
 class CheckResult(BaseModel):
     """The outcome of one gateway checkpoint."""
 
-    checkpoint: str  # registry | policy | domain | firewall | trust | rate_limit | output | dlp
+    # registry | policy | domain | firewall | trust | rate_limit | approval |
+    # recheck | execution | output | dlp
+    checkpoint: str
     passed: bool
     detail: str
 
@@ -74,6 +76,9 @@ class ToolInfo(BaseModel):
     parameters: dict[str, str]
     domain_checked_argument: str | None
     requires_approval: bool = False
+    # True when a real (non-sandbox) adapter exists for this tool; it runs only
+    # when TOOL_EXECUTION_MODE=live (and, if side-effecting, after approval).
+    live_capable: bool = False
 
 
 class ReviewRequest(BaseModel):

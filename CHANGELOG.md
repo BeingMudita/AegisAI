@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-10-10 — Real tool adapters behind the approval workflow
+
+Until now every tool was a sandbox simulation — the point of the project was the
+gate in front of the tool, not the tool itself. This adds **real adapters** that
+actually perform the action, reachable only through the controls already in place.
+
+- **Adapters** (`backend/app/tools/adapters.py`, standard library only). Real
+  implementations with the same signature as their sandbox twins: `web_fetch` (HTTP
+  GET, https-only, no redirects, size/time capped), `send_email` (SMTP via
+  `smtplib`), `external_upload` (HTTP POST), and `shell` (`subprocess`, timed out).
+- **Safe by default.** `TOOL_EXECUTION_MODE=sandbox` (the default) keeps every tool
+  simulated — tests, demos and red-team runs have no real-world effect. Set it to
+  `live` to use the adapters.
+- **No real side effect without approval.** The gateway adds a final `execution`
+  checkpoint: in live mode a side-effecting adapter (email, upload, shell) runs only
+  when the request carries a human approval, and the live shell stays off unless
+  `TOOL_SHELL_ENABLE=1`. A misconfigured policy (a side-effecting tool not marked
+  `requires_approval`) is refused at that checkpoint rather than executed — fail safe.
+  Read-only `web_fetch` may run live without approval.
+- **Unchanged guarantees.** The six checkpoints still run first, and on approval are
+  re-verified; DLP still redacts outgoing email/upload text before the real adapter
+  sees it; tool output is still firewall-scanned on the way back. The adapter only
+  runs once all of that passes.
+- **Config.** `TOOL_EXECUTION_MODE`, `TOOL_SHELL_ENABLE`, `TOOL_HTTP_TIMEOUT_SECONDS`,
+  `TOOL_HTTP_MAX_BYTES`, and `SMTP_*` (see `.env.example`). `ToolInfo.live_capable`
+  marks which tools have a real adapter. No new runtime dependencies.
+- **Tests.** `backend/tests/test_tool_adapters.py`: adapter selection, the approval
+  and shell-enable guards, each adapter with its I/O monkeypatched, and the
+  end-to-end live path (execute → queued → approved → real SMTP send).
+
 ## 2026-10-07 — Phases 10, 12 and 13: quotas and retention, semantic detection, supply chain
 
 This also merges `main` into this branch, which brings in the developer platform

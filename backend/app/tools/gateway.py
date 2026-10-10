@@ -25,6 +25,13 @@ Tools marked ``requires_approval`` stop after the checkpoints pass: the request
 is queued for a human. On approval every checkpoint is re-run (the agent's trust,
 its policy or the domain list may have changed meanwhile) before the tool runs;
 claiming a request is atomic, so it can never execute twice.
+
+Execution is sandboxed by default: every tool is a simulation (see
+:mod:`app.tools.sandbox`). With ``TOOL_EXECUTION_MODE=live`` the real adapters in
+:mod:`app.tools.adapters` run instead — but a side-effecting one (email, upload,
+shell) runs live only after a human approval, and the live shell stays off unless
+``TOOL_SHELL_ENABLE`` is set. The gateway enforces both as a final ``execution``
+checkpoint, so a misconfigured policy can never cause an unapproved real effect.
 """
 
 from __future__ import annotations
@@ -54,6 +61,7 @@ from app.policies.config import GlobalPolicyConfig, ToolPolicy, get_global_confi
 from app.policies.engine import PolicyEngine
 from app.policies.store import get_policy
 from app.telemetry.store import get_audit_log
+from app.tools.adapters import LIVE_ADAPTERS, SIDE_EFFECTING, RunFn
 from app.tools.sandbox import IMPLEMENTATIONS, OUTBOX, ToolContext, ToolImpl
 from app.tools.schemas import CheckResult, ToolCallResult, ToolInfo
 from app.trust.engine import TrustEngine, get_trust_engine
@@ -160,6 +168,7 @@ class ToolGateway:
                     parameters=impl.parameters,
                     domain_checked_argument=impl.domain_arg,
                     requires_approval=tp.requires_approval,
+                    live_capable=name in LIVE_ADAPTERS,
                 )
             )
         return out
@@ -273,6 +282,18 @@ class ToolGateway:
         policy_engine: PolicyEngine,
     ) -> ToolCallResult:
         agent, session_id = result.agent, result.session_id
+        try:
+            run_fn, mode = self._select_adapter(result, impl)
+        except _Denied as denied:
+            self._deny(result, denied)
+            return self._finish(result)
+        result.checks.append(
+            CheckResult(
+                checkpoint="execution",
+                passed=True,
+                detail=f"Ran the {mode} adapter for '{impl.name}'.",
+            )
+        )
         context = ToolContext(
             agent=agent,
             session_id=session_id,
@@ -280,7 +301,7 @@ class ToolGateway:
             outbox=self.outbox,
         )
         try:
-            raw_output = impl.run(result.arguments, context)
+            raw_output = run_fn(result.arguments, context)
         except Exception as exc:  # noqa: BLE001 — any tool failure is reported, not raised
             result.status = ToolRequestStatus.FAILED
             result.decision_reason = f"Tool error: {exc}"
@@ -309,6 +330,37 @@ class ToolGateway:
             session_id=session_id,
         )
         return self._finish(result)
+
+    def _select_adapter(self, result: ToolCallResult, impl: ToolImpl) -> tuple[RunFn, str]:
+        """Pick the sandbox or the live adapter, enforcing the live-safety rules.
+
+        Returns ``(run_fn, "sandbox" | "live")``. Raises ``_Denied`` at the
+        ``execution`` checkpoint if a live run would break an invariant: a
+        side-effecting tool that was not approved, or the shell while it is off.
+        """
+        settings = get_settings()
+        live = LIVE_ADAPTERS.get(impl.name)
+        if not settings.use_live_tools or live is None:
+            return impl.run, "sandbox"
+        if impl.name == "shell" and not settings.tool_shell_enable:
+            raise _Denied(
+                "execution",
+                "Live shell execution is disabled; set TOOL_SHELL_ENABLE to allow it "
+                "(the call still needs approval).",
+                event=SecurityEventType.POLICY_VIOLATION,
+                severity=SecuritySeverity.HIGH,
+                signal=TrustSignal.POLICY_VIOLATION,
+            )
+        if impl.name in SIDE_EFFECTING and not result.reviewed_by:
+            raise _Denied(
+                "execution",
+                f"Live '{impl.name}' is a side-effecting action and may run only after human "
+                "approval — mark the tool requires_approval so it is queued first.",
+                event=SecurityEventType.POLICY_VIOLATION,
+                severity=SecuritySeverity.HIGH,
+                signal=TrustSignal.POLICY_VIOLATION,
+            )
+        return live, "live"
 
     # ------------------------------------------------------- human approval
     def _queue_for_approval(
