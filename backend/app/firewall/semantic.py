@@ -6,6 +6,13 @@ hashed features of the normalised text:
 
 * stemmed word unigrams and bigrams — the vocabulary of an attack ("guidance …
   no longer applies", "persona … no filters"), not one exact phrase;
+* **intent-abstraction features** (Phase 12.1): each word is mapped to its attack
+  intent via ``lexicon.py`` (OVERRIDE, CONSTRAINT, REVEAL, CREDENTIAL, …), and
+  the text contributes the set of intents present and their co-occurring pairs.
+  "overlook the boundaries" and "ignore the rules" share no words but both emit
+  ``ix:CONSTRAINT+OVERRIDE`` — this is what lets the model recognise a paraphrase
+  it has never seen. The ``REPORT`` intent (text that quotes or teaches about an
+  attack) lets it tell issuing an attack from merely describing one.
 * the channel the text arrived on (instructions in a retrieved document mean
   more than the same words typed by the user).
 
@@ -28,35 +35,48 @@ from __future__ import annotations
 import json
 import math
 import random
-import re
-import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.firewall import lexicon
 from app.firewall.normalize import normalize
+from app.firewall.semantic_features import (
+    FEATURE_VERSION,
+    HASH_BITS,
+    MAX_CHARS,
+    hash_feature,
+    l2_normalize,
+    tokenize,
+)
 
 MODEL_PATH = Path(__file__).with_name("semantic_model.json")
-FEATURE_VERSION = 1
-HASH_BITS = 18
-_MASK = (1 << HASH_BITS) - 1
-_WORD = re.compile(r"[a-z0-9]+")
-_SUFFIXES = ("ing", "ied", "ies", "ed", "es", "ly", "s")
-_MAX_CHARS = 8000  # longer text is scored on its first 8,000 characters
+
+__all__ = [
+    "FEATURE_VERSION",
+    "HASH_BITS",
+    "Example",
+    "LogisticModel",
+    "SemanticClassifier",
+    "features",
+    "get_semantic_classifier",
+]
 
 
-def _stem(word: str) -> str:
-    for suffix in _SUFFIXES:
-        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[: -len(suffix)]
-    return word
-
-
-def _hash(feature: str) -> int:
-    return zlib.crc32(feature.encode("utf-8")) & _MASK
+def _intent_feature_names(stems: Sequence[str], text_lower: str) -> set[str]:
+    """Abstract intent features: which attack intents are present, and which pairs
+    co-occur. Word-order-free on purpose — a paraphrase keeps the intents, not
+    their arrangement."""
+    present: set[str] = set(lexicon.phrase_classes(text_lower))
+    for s in stems:
+        present |= lexicon.classes_of_stem(s)
+    names = {f"i:{c}" for c in present}
+    names.update(f"ix:{a}+{b}" for a, b in combinations(sorted(present), 2))
+    return names
 
 
 def features(text: str, channel: str, *, canonical: bool = False) -> dict[int, float]:
@@ -64,16 +84,15 @@ def features(text: str, channel: str, *, canonical: bool = False) -> dict[int, f
 
     ``canonical=True`` means ``text`` was already normalised (the scanner's copy).
     """
-    clipped = text[:_MAX_CHARS]
+    clipped = text[:MAX_CHARS]
     canonical_text = (clipped if canonical else normalize(clipped).text).lower()
-    words = _WORD.findall(canonical_text)
-    stems = [_stem(w) for w in words]
+    stems = tokenize(canonical_text)
     names = {f"c:{channel}"}
     names.update(f"w:{s}" for s in stems)
     names.update(f"b:{a}_{b}" for a, b in zip(stems, stems[1:], strict=False))
-    indices = {_hash(n) for n in names}
-    value = 1.0 / math.sqrt(len(indices))
-    return dict.fromkeys(indices, value)
+    names |= _intent_feature_names(stems, canonical_text)
+    indices = {hash_feature(n) for n in names}
+    return l2_normalize(indices)
 
 
 def _sigmoid(z: float) -> float:
@@ -130,9 +149,18 @@ def train(
 
 
 def out_of_fold_probabilities(
-    examples: Sequence[Example], *, folds: int = 5, **kwargs: Any
+    examples: Sequence[Example],
+    *,
+    folds: int = 5,
+    extra: Sequence[Example] = (),
+    **kwargs: Any,
 ) -> list[float]:
-    """Each example's probability from a model trained without it (stratified k-fold)."""
+    """Each example's probability from a model trained without it (stratified k-fold).
+
+    ``extra`` examples (e.g. adversarial augmentation) join every fold's training
+    set but are never evaluated, so the returned probabilities stay an honest
+    out-of-fold estimate over ``examples`` alone.
+    """
     by_class: dict[bool, list[int]] = {True: [], False: []}
     for i, e in enumerate(examples):
         by_class[e.malicious].append(i)
@@ -142,7 +170,7 @@ def out_of_fold_probabilities(
             fold_of[i] = rank % folds
     probs = [0.0] * len(examples)
     for f in range(folds):
-        train_set = [e for i, e in enumerate(examples) if fold_of[i] != f]
+        train_set = [e for i, e in enumerate(examples) if fold_of[i] != f] + list(extra)
         model = train(train_set, **kwargs)
         for i, e in enumerate(examples):
             if fold_of[i] == f:

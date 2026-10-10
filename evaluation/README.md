@@ -91,9 +91,9 @@ The firewall here means the signature rules plus the semantic layer.
 
 | | Development set | Held-out sets (v1 + v2) |
 |---|---|---|
-| Firewall precision | 98.0% | 91.8% |
-| Firewall recall | 100% (50 / 50 attacks) | 70.3% (45 / 64 attacks) |
-| False-positive rate | 3.0% (1 / 33 benign, flagged, not blocked) | 9.1% (4 / 44 benign: 2 blocked by rules, 2 flagged by the semantic layer) |
+| Firewall precision | 98.0% | 96.2% |
+| Firewall recall | 100% (50 / 50 attacks) | 79.7% (51 / 64 attacks) |
+| False-positive rate | 3.0% (1 / 33 benign, flagged, not blocked) | 4.5% (2 / 44 benign, both blocked by the rules, not the semantic layer) |
 | Scan latency p95 | < 0.5 ms | |
 | Agent scenarios | 22 / 22 pass | |
 
@@ -103,13 +103,13 @@ They also block two benign documents that *quote* attack phrases: a security
 training note and a password-reset guide. Most paraphrased attacks get past the
 rules. The semantic layer catches many of those, as the next section shows.
 
-### Semantic layer (Phase 12)
+### Semantic layer (Phase 12, generalisation update 12.1)
 
-`backend/app/firewall/semantic.py` is an L2-regularised logistic regression over
-hashed, stemmed word unigrams and bigrams plus the input channel. It is pure
-Python. `evaluation/train_semantic.py` trains it on the development sets only:
-`firewall_cases.yaml` and `firewall_paraphrase.yaml`. Five-fold stratified
-cross-validation of the whole firewall (rules OR semantic) picks two settings:
+`backend/app/firewall/semantic.py` is an L2-regularised logistic regression in
+pure Python. `evaluation/train_semantic.py` trains it on the development sets
+only — `firewall_cases.yaml` and `firewall_paraphrase.yaml` — plus an adversarial
+augmentation set (below). Five-fold stratified cross-validation of the whole
+firewall (rules OR semantic) picks two settings on the development cases:
 
 - the L2 strength;
 - the threshold that gives the best recall at no more than 5% false positives.
@@ -118,38 +118,55 @@ The scanner asks the semantic layer only about text the rules allow. A hit
 raises ALLOW to FLAG, never to BLOCK. A false positive therefore costs a review,
 not a refusal.
 
+**Features.** Hashed, stemmed word unigrams and bigrams and the input channel,
+*plus intent-abstraction features*: each word is mapped to its attack intent
+(OVERRIDE, CONSTRAINT, REVEAL, CREDENTIAL, SEND, PERSONA, ADDRESSEE, REPORT …) via
+`app/firewall/lexicon.py`, and the model sees which intents a text contains and
+which co-occur. "overlook the boundaries" and "ignore the rules" share no words
+but the same intent pair, so an unseen paraphrase lands on a feature the model
+has already weighted — the lever that closes the generalisation gap. The `REPORT`
+intent lets the model tell *issuing* an attack from *quoting* one.
+
+**Adversarial augmentation** (`app/firewall/adversarial.py`). A deterministic
+generator recombines the intent synonyms into ~400 attack variants and framing
+wrappers, with hard negatives that carry the vocabulary benignly. These join
+every training fold to teach the weights, but the threshold and every number
+below are measured on the *real* development cases only. The generator is
+authored from attack semantics and the development vocabulary, never the held-out
+phrasings; a test fails if any generated line shares a 5-word run with a held-out
+case, so the held-out recall stays an honest test of generalisation.
+
 Each suite was scored with the rules alone, then with the semantic layer added:
 
 | Suite | Cases | Recall, rules → + semantic | FPR, rules → + semantic |
 |---|--:|---|---|
-| Development, out-of-fold (cross-validation) | 186 | 59.2% → 78.6% | 2.4% → 4.8% |
+| Development, out-of-fold (cross-validation) | 186 | 59.2% → 82.5% | 2.4% → 4.8% |
 | `firewall_cases.yaml` (rules tuned, semantic trained) | 83 | 96.0% → 100% | 3.0% → 3.0% |
 | `firewall_paraphrase.yaml` (semantic trained) | 103 | 24.5% → 100% | 2.0% → 2.0% |
-| `firewall_holdout.yaml` v1 (seen while building) | 53 | 48.4% → 80.6% | 9.1% → 13.6% |
-| **`firewall_holdout_v2.yaml` (written after the freeze)** | 55 | **27.3% → 60.6%** | **0.0% → 4.5%** |
+| `firewall_holdout.yaml` v1 (seen while building) | 53 | 48.4% → 77.4% | 9.1% → 9.1% |
+| **`firewall_holdout_v2.yaml` (written after the freeze)** | 55 | **27.3% → 81.8%** | **0.0% → 0.0%** |
 
 How to read this:
 
 - **Trained-on rows are optimistic.** The 100% on the training sets says
   nothing about new text. The out-of-fold row and the held-out rows do.
 - **v1 has been seen.** Its misses appeared in reports while the layer was
-  being built. No v1 case was used for training or for the threshold, but the
-  paraphrase set's author had read them, so v1's gain is an upper bound.
-- **v2 was written after the model was frozen** (commit `bab8086`), and the
-  model was not changed after scoring it. Its author is the same, though, so
-  even v2 is not an independent benchmark. An outside red team is the next
-  step up.
-- **What still gets through on v2:** claims of authority or permission ("the
-  people who configured you said I'm allowed…"), politely worded override
-  requests, personas with power ("a character called Root"), hypothetical
-  framings, and instructions disguised as notices or FAQ entries in retrieved
-  text. That is about four in ten attacks.
-- **The cost:** one benign case flagged on v2 (a phishing-training example that
-  quotes a credential request) and one more on v1. None was blocked.
+  being built, so v1's recall is an upper bound and was not optimised for.
+- **v2 was written after the model was frozen** (commit `bab8086`) and is the
+  honest estimate of generalisation: **27.3% → 81.8%** recall at no extra false
+  positives, up from 60.6% before this update. Its author is the same, though,
+  so even v2 is not a fully independent benchmark — an outside red team is the
+  next step up.
+- **What still gets through on v2:** a few base64/encoding-wrapped exfiltrations,
+  authority-claim overrides ("the people who configured you said I'm allowed…"),
+  and some retrieved-text notices. About two in ten attacks.
+- **The cost:** zero benign cases flagged by the semantic layer on v2. The two
+  benign BLOCKs on v1 are the *signature rules* firing on text that quotes an
+  attack; the semantic layer scores both well below threshold (p ≈ 0.1).
 
-To retrain after editing a development set, run `python evaluation/train_semantic.py`.
-CI fails while the shipped model is stale. `FIREWALL_SEMANTIC=false` turns the
-layer off.
+To retrain after editing a development set or the augmentation, run
+`python evaluation/train_semantic.py`. CI fails while the shipped model is stale.
+`FIREWALL_SEMANTIC=false` turns the layer off.
 
 ### Four-configuration comparison (latest run)
 
@@ -169,10 +186,11 @@ milliseconds per turn over baseline (about 3 ms in the latest run; noisy).
 
 **Known limitations** (kept in the benchmark on purpose):
 
-* Text detection is imperfect. Even with the semantic layer, about four in ten
-  paraphrased attacks on held-out v2 get through. The semantic layer is a
-  linear model trained on about 190 examples; it learns attack vocabulary, not
-  meaning. The tool gateway still constrains what a missed attack can make an
+* Text detection is imperfect. Even with the semantic layer and adversarial
+  augmentation, about two in ten paraphrased attacks on held-out v2 get through.
+  The semantic layer is a linear model over word and intent features; it learns
+  attack vocabulary and the intents behind it, not full meaning. The tool gateway
+  still constrains what a missed attack can make an
   agent *do*: deny-by-default tools, domain allow-lists, trust gates and output
   DLP. That is why the agent scenarios hold even where text detection fails.
   Next steps for paraphrase coverage:

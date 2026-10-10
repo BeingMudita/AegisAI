@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.firewall import semantic  # noqa: E402
 from app.firewall.semantic_training import (  # noqa: E402
+    augmented_examples,
     examples,
     fingerprints,
     rule_detections,
@@ -61,12 +62,19 @@ def main() -> int:
 
     sets = training_sets()
     data = examples(sets)
+    aug = augmented_examples()
     rules = rule_detections(data)
-    print(f"Training on {len(data)} development cases ({sum(e.malicious for e in data)} attacks)")
+    print(
+        f"Training on {len(data)} development cases ({sum(e.malicious for e in data)} attacks) "
+        f"+ {len(aug)} adversarial examples ({sum(e.malicious for e in aug)} attacks). "
+        "Threshold and metrics are measured on the development cases only."
+    )
 
     best = None
     for l2 in L2_GRID:
-        probs = semantic.out_of_fold_probabilities(data, l2=l2, epochs=EPOCHS, seed=SEED)
+        probs = semantic.out_of_fold_probabilities(
+            data, extra=aug, l2=l2, epochs=EPOCHS, seed=SEED
+        )
         threshold, cv = semantic.pick_threshold(data, probs, rules, max_fpr=args.max_fpr)
         print(f"  l2={l2:g}: threshold {threshold:.3f}, out-of-fold {cv}")
         if best is None or cv["cv_recall"] > best[2]["cv_recall"]:  # ties: weaker l2 wins
@@ -74,16 +82,18 @@ def main() -> int:
     assert best is not None
     l2, threshold, cv = best
 
-    model = semantic.train(data, l2=l2, epochs=EPOCHS, seed=SEED)
+    model = semantic.train(list(data) + list(aug), l2=l2, epochs=EPOCHS, seed=SEED)
     classifier = semantic.SemanticClassifier(
         model,
         threshold,
         {
             "trained_on": fingerprints(sets),
             "training_cases": len(data),
+            "augmentation_cases": len(aug),
             "hyperparameters": {"l2": l2, "epochs": EPOCHS, "seed": SEED, "folds": 5},
             "threshold_rule": (
-                f"best rules-OR-semantic recall at out-of-fold FPR <= {args.max_fpr:.0%}"
+                f"best rules-OR-semantic recall at out-of-fold FPR <= {args.max_fpr:.0%} "
+                "(measured on development cases; augmentation joins training only)"
             ),
             "cross_validation": cv,
         },

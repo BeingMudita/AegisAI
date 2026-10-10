@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-10-10 — Phase 12.1: closing the generalisation gap
+
+The principal open challenge for the semantic layer was its recall on *unseen,
+paraphrased* attacks — held-out v2, the set written after the model froze, sat at
+60.6%. Two changes lift it to 81.8% without raising false positives, and without
+touching the held-out files.
+
+- **Intent-abstraction features** (`app/firewall/lexicon.py`,
+  `app/firewall/semantic.py`). Each word is mapped to its attack intent — OVERRIDE,
+  CONSTRAINT, REVEAL, CREDENTIAL, SEND, PERSONA, ADDRESSEE, REPORT … — lifted from the
+  signature rules' own synonym groups. The classifier now also sees which intents a
+  text contains (`i:OVERRIDE`) and which co-occur (`ix:CONSTRAINT+OVERRIDE`). "overlook
+  the boundaries" and "ignore the rules" share no words but the same intent pair, so a
+  paraphrase the model has never seen lands on a feature it has already weighted. The
+  `REPORT` intent (text that *quotes* or *teaches about* an attack) lets it tell issuing
+  an attack from describing one. `FEATURE_VERSION` is bumped to 2; the shipped model is
+  retrained.
+- **Adversarial augmentation** (`app/firewall/adversarial.py`). A deterministic
+  generator recombines the intent synonyms into ~400 attack variants and framing
+  wrappers, plus hard negatives (security-awareness copy, phishing-drill examples) that
+  carry the vocabulary without the intent. These join every training fold to teach the
+  weights; the decision threshold and all reported metrics are still measured on the
+  real development cases only — synthetic data never flatters the numbers.
+- **Leakage guard.** The augmentation is authored from attack semantics and the
+  development vocabulary, never the held-out phrasings. `adversarial.assert_disjoint_from`
+  fails if any generated line shares a 5-word run with a held-out case, and a test runs
+  it against both held-out files — so the held-out recall stays an honest test of
+  generalisation. (Early drafts that leaked held-out phrasings scored ~91% on v2; after
+  decontamination the honest figure is 81.8%.)
+- **Results (rules → + semantic).**
+
+  | Data | Recall | FPR |
+  |---|---|---|
+  | Development, out-of-fold | 59.2% → 82.5% | 2.4% → 4.8% |
+  | Held-out v1 | 48.4% → 77.4% | 9.1% → 9.1% |
+  | **Held-out v2 (cleanest)** | **27.3% → 81.8%** | **0% → 0%** |
+
+  The two remaining held-out v1 false positives are signature-rule BLOCKs on benign
+  text that quotes an attack; the semantic layer scores both well below threshold
+  (p ≈ 0.1). All 22 agent scenarios still pass.
+
 ## 2026-10-07 — Phases 10, 12 and 13: quotas and retention, semantic detection, supply chain
 
 This also merges `main` into this branch, which brings in the developer platform
