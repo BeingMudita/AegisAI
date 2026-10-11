@@ -525,7 +525,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
                 for c, title, source in db.execute(query)
             ]
 
-    def stats(self) -> KnowledgeBaseStats:
+    def stats(self, *, include_sources: bool = True) -> KnowledgeBaseStats:
         docs = self.documents()
         with transaction() as db:
             levels = {s.name: s.trust_level for s in db.scalars(select(DocumentSource))}
@@ -541,7 +541,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
         for d in docs:
             per_source.setdefault(d.source, []).append(d)
         summaries = []
-        for source, items in sorted(per_source.items()):
+        for source, items in sorted(per_source.items()) if include_sources else ():
             level = levels.get(source, items[0].trust_level)
             summaries.append(
                 SourceSummary(
@@ -564,7 +564,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
             chunks_quarantined=quarantined,
             sources=[s.source for s in summaries],
             source_summaries=summaries,
-            source_count=len(summaries),
+            source_count=len(per_source),
             memory_bytes=self.store.memory_bytes(),
             persisted=True,
         )

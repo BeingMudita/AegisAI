@@ -13,8 +13,12 @@ export class ApiError extends Error {
 
 let token: string | null = null;
 let onUnauthorized: () => void = () => {};
+// GET responses the server tagged with an ETag. A poll sends the tag back, and an
+// unchanged result comes back as an empty 304 instead of the whole body again.
+const tagged = new Map<string, { etag: string; data: unknown }>();
 
 export function setToken(value: string | null): void {
+  if (value !== token) tagged.clear();
   token = value;
 }
 
@@ -27,6 +31,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && typeof init.body === "string") headers.set("Content-Type", "application/json");
+  const cached = init.method ? undefined : tagged.get(path);
+  if (cached) headers.set("If-None-Match", cached.etag);
 
   let resp: Response;
   try {
@@ -36,6 +42,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(0, "Cannot reach the API. Check your connection and that the backend is running.");
   }
   if (resp.status === 401 && requestToken && requestToken === token) onUnauthorized();
+  if (resp.status === 304 && cached) return cached.data as T;
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
@@ -49,7 +56,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(resp.status, detail);
   }
   if (resp.status === 204) return undefined as T;
-  return (await resp.json()) as T;
+  const data = (await resp.json()) as T;
+  const etag = init.method ? null : resp.headers.get("ETag");
+  if (etag && requestToken === token) tagged.set(path, { etag, data });
+  return data;
 }
 
 export const api = {

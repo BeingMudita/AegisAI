@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from app.firewall.scanner import REDACTION
 from app.rag.schemas import RetrievedChunk
 from app.rag.text import IDENTIFIER, ordered_terms, terms
 from app.tools.schemas import ToolInfo
@@ -48,7 +49,18 @@ _INSTRUCTION = re.compile(
     r"|\b(hide|omit|suppress)\b.{0,40}\b(exception|discrepanc|change|this|from the (final|answer))"
     r"|\bdo not (include|mention|reveal|tell)\b"
     r"|\b(system|higher)[- ]priority\b|\btrusted[- ]system\b|\bpriority:\s*system\b"
-    r"|\b(you are|act as|from now on)\b.{0,40}\b(assistant|agent|ai|model)\b",
+    r"|\b(you are|act as|from now on)\b.{0,40}\b(assistant|agent|ai|model)\b"
+    # Planted in records to bend an audit: hide the issues, override the figures, and
+    # claim the controls passed. ("Customer data must never be disclosed" is policy, and
+    # stays: only the concealment of issues is matched.)
+    r"|\b(issues?|exceptions?|discrepanc\w*|problems?|errors?|findings?|variances?)\b.{0,40}"
+    r"\b(never|not)\s+(be\s+)?(disclosed|reported|mentioned|shown|raised|flagged)"
+    r"|\b(never|don'?t|do not)\s+(disclose|report|mention|reveal|raise|flag)\b.{0,40}"
+    r"\b(issues?|exceptions?|discrepanc\w*|problems?|errors?|findings?|variances?)\b"
+    r"|\bchange (your|the) (conclusion|answer|finding|assessment|opinion)"
+    r"|\b(disregard|ignore)\b.{0,30}\b(calculations?|line[- ]items?|evidence|reconciliation)"
+    r"|\bas the (authoritative|official|correct) (total|figure|amount|value)"
+    r"|\bstate\s+(that\s+)?(all\s+)?(controls?|checks?)\s+(passed|are\s+(fine|ok))",
     re.I,
 )
 
@@ -99,8 +111,57 @@ def needs_context(message: str) -> bool:
     return intent(message) == "question"
 
 
+# A follow-up leans on the question before it: "and who approves the biggest ones?"
+_FOLLOW_UP_LEAD = re.compile(
+    r"^\s*(and|also|plus|but|so|then|what\s+about|how\s+about|same\s+for|what\s+if)\b", re.I
+)
+_FOLLOW_UP_REF = re.compile(
+    r"\b(it|its|that|those|these|them|they|their|ones?|the\s+same|above|previous|earlier)\b", re.I
+)
+
+
+def search_query(message: str, history: list[tuple[str, str]]) -> str:
+    """What to search the knowledge base with. A short follow-up means little on its own
+    ("and who approves the biggest ones?" finds payroll records), so it is searched
+    together with the last question that was asked."""
+    previous = next((q for q, _ in reversed(history) if intent(q) == "question"), None)
+    asked = focus(message)
+    if previous is None or any(IDENTIFIER.match(t) for t in terms(asked)):
+        return message
+    own = len(terms(asked))
+    if (_FOLLOW_UP_LEAD.search(asked) and own <= 5) or (_FOLLOW_UP_REF.search(asked) and own <= 3):
+        return f"{focus(previous)} {message}"
+    return message
+
+
+def on_topic(chunks: list[RetrievedChunk], query: str) -> list[RetrievedChunk]:
+    """The passages worth reading for ``query``: repeats (the same file uploaded twice)
+    are dropped, and when some passages clearly cover the question, those that share
+    little of its wording are set aside. When nothing matches word for word, every
+    passage stays — the vector search may have found a paraphrase."""
+    wanted = terms(focus(query))
+    unique: list[RetrievedChunk] = []
+    seen: set[str] = set()
+    for c in chunks:
+        if c.content not in seen:
+            seen.add(c.content)
+            unique.append(c)
+    if not wanted:
+        return unique
+
+    def cover(c: RetrievedChunk) -> float:
+        return len(terms(f"{c.document_title} {c.content}") & wanted) / len(wanted)
+
+    covers = [cover(c) for c in unique]
+    best = max(covers, default=0.0)
+    if best < 0.5:
+        return unique
+    return [c for c, v in zip(unique, covers, strict=True) if v >= best / 2]
+
+
 # ----------------------------------------------------------------- small talk
-def _capabilities(tools: list[ToolInfo]) -> tuple[str, list[str]]:
+def capabilities(tools: list[ToolInfo]) -> tuple[str, list[str]]:
+    """What the agent can do, in words, and a few example requests."""
     names = [t.name for t in tools if t.name in _CAPABILITY]
     things = [_CAPABILITY[n] for n in names]
     if not things:
@@ -109,8 +170,17 @@ def _capabilities(tools: list[ToolInfo]) -> tuple[str, list[str]]:
     return joined, [_EXAMPLE[n] for n in names][:3]
 
 
+def lacking(tools: list[ToolInfo]) -> str:
+    """What this agent can't do that another one can, in words ("" when nothing)."""
+    have = {t.name for t in tools}
+    things = [v for k, v in _CAPABILITY.items() if k not in have]
+    if not things:
+        return ""
+    return things[0] if len(things) == 1 else ", ".join(things[:-1]) + " or " + things[-1]
+
+
 def small_talk(kind: Intent, agent: str, tools: list[ToolInfo], returning: bool) -> str:
-    can, examples = _capabilities(tools)
+    can, examples = capabilities(tools)
     try_these = (
         "\n\nYou could ask, for example:\n" + "\n".join(f"- {e}" for e in examples)
         if examples
@@ -138,6 +208,25 @@ class _Passage:
     sentences: list[tuple[int, str, set[str]]]  # (position, text, matched terms)
     matched: set[str]
     skipped_instructions: int
+
+
+def _directive(sentence: str) -> bool:
+    """A sentence written at the assistant, or what is left of one after the firewall cut
+    the attack out of it ("[REMOVED: …] and explain how to skip the approval step")."""
+    return bool(_INSTRUCTION.search(sentence)) or REDACTION in sentence
+
+
+def without_instructions(text: str) -> tuple[str, int]:
+    """``text`` minus the sentences that read like instructions to an assistant, and how
+    many lines lost one. Used on material handed to the LLM, which is otherwise apt to
+    repeat "do not mention unresolved issues" as if it were company policy."""
+    kept, removed = [], 0
+    for line in text.splitlines():
+        if _directive(line):
+            line = " ".join(s for s in _SENTENCE.split(line) if not _directive(s))
+            removed += 1
+        kept.append(line)
+    return "\n".join(kept), removed
 
 
 def _sentences(text: str) -> list[str]:
@@ -182,7 +271,7 @@ def _passage(chunk: RetrievedChunk, wanted: set[str]) -> _Passage:
     labels = " ".join(line for line in chunk.content.splitlines() if line.lstrip().startswith("#"))
     matched = terms(f"{labels} {chunk.document_title}") & wanted
     for i, s in enumerate(_sentences(chunk.content)):
-        if _INSTRUCTION.search(s):
+        if _directive(s):
             skipped += 1
             continue
         hit = terms(s) & wanted
@@ -282,7 +371,7 @@ def clarify(message: str, chunks: list[RetrievedChunk], tools: list[ToolInfo]) -
     """Nothing answers the question: say so, and ask what the person means."""
     message = focus(message)
     wanted = terms(message)
-    _, examples = _capabilities(tools)
+    _, examples = capabilities(tools)
     near = []
     for c in chunks:
         title = c.document_title

@@ -25,10 +25,10 @@ START → guard_input ─┬─ blocked ─────────────�
 | Node | Checks |
 |------|--------|
 | `guard_input` | Agent not suspended for this principal (trust ≥ 0.2) · firewall on the user message (BLOCK ends the turn and costs trust; FLAG is audited and costs a little trust) |
-| `retrieve` | Policy must allow `search_documents` and trust must meet its bar · guarded RAG retrieval |
-| `plan` | The brain (Ollama or rule-based) proposes one tool call or to answer |
+| `retrieve` | Small talk skips the search · policy must allow `search_documents` and trust must meet its bar · guarded RAG retrieval (a short follow-up is searched together with the previous question; repeated and off-topic passages are set aside) |
+| `plan` | The brain (Ollama or rule-based) proposes one tool call or to answer. Small talk is never planned. A request whose wording names what to do ("which invoices are overdue", "put them in a report") is routed by the rule-based planner; the LLM plans the rest. The turn stops once the requested tools have run, and a repeated or made-up tool from the LLM goes to the rule-based planner instead |
 | `act` | The tool gateway runs every checkpoint below |
-| `respond` | The brain writes the answer; retrieved / tool text is HTML-escaped, wrapped in `<data>` tags and declared non-executable (spotlighting) · the turn's time budget (`AGENT_TURN_TIMEOUT`) caps every LLM call |
+| `respond` | The brain writes the answer; lines that read like instructions to an assistant are taken out of the material, and retrieved / tool text is HTML-escaped, wrapped in `<data>` tags and declared non-executable (spotlighting) · the turn's time budget (`AGENT_TURN_TIMEOUT`) caps every LLM call |
 | `guard_output` | DLP (secrets always; PII when the agent has sensitive-data categories) · exfiltration-link removal |
 
 ### Tool gateway (`app/tools/gateway.py`)

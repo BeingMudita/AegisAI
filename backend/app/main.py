@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -44,6 +45,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         sweeper = RetentionSweeper(settings.retention_interval_minutes * 60)
         sweeper.start()
+    if settings.llm_backend.lower() != "rule_based":
+        # Load the model in the background, so the first question doesn't wait for it.
+        from app.agents.brain import warm_up
+
+        threading.Thread(target=warm_up, name="llm-warm-up", daemon=True).start()
+    if settings.rag_persist and not settings.use_postgres:
+        # Read the saved index now rather than on the first dashboard request.
+        from app.rag.knowledge_base import preload_knowledge_base
+
+        threading.Thread(target=preload_knowledge_base, name="kb-preload", daemon=True).start()
     yield
     if sweeper is not None:
         sweeper.stop()

@@ -1,5 +1,7 @@
 """Tests for the trust engine (Phase 4)."""
 
+from urllib.parse import quote
+
 from fastapi.testclient import TestClient
 
 from app.database.enums import SecurityEventType, SubjectType, TrustLevel
@@ -119,6 +121,30 @@ def test_trust_api_list_and_detail() -> None:
     assert detail.json()["score"] == 0.6
 
     assert client.get("/api/trust/AGENT/nobody", headers=_h(analyst)).status_code == 404
+
+
+def test_trust_api_handles_sources_named_by_path_and_filters_by_level() -> None:
+    engine = get_trust_engine()
+    path = "corpus/documents/invoice/FIN-000002088.txt"
+    engine.observe(SubjectType.SOURCE, path, TrustSignal.FIREWALL_BLOCK)
+    analyst, admin = _token("analyst", "analyst123"), _token("admin", "admin123")
+
+    # The id is a path: the history and the override must both find it.
+    detail = client.get(f"/api/trust/SOURCE/{quote(path, safe='')}", headers=_h(analyst))
+    assert detail.status_code == 200
+    assert detail.json()["subject_id"] == path
+    body = {"score": 0.1, "rationale": "reviewed"}
+    resp = client.put(f"/api/trust/SOURCE/{quote(path, safe='')}", json=body, headers=_h(admin))
+    assert resp.status_code == 200
+    assert engine.score(SubjectType.SOURCE, path) == 0.1
+
+    listing = client.get(
+        "/api/trust", params={"subject_type": "SOURCE", "level": "UNTRUSTED"}, headers=_h(analyst)
+    ).json()
+    assert listing["scores"] and all(s["level"] == "UNTRUSTED" for s in listing["scores"])
+    assert path in {s["subject_id"] for s in listing["scores"]}
+    assert listing["total"] == listing["levels"]["UNTRUSTED"]
+    assert sum(listing["levels"].values()) >= listing["total"]
 
 
 def test_only_admin_can_override() -> None:

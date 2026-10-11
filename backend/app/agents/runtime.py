@@ -22,6 +22,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.agents import conversation
 from app.agents.brain import AgentBrain, get_brain
 from app.agents.schemas import AgentAction, AgentTurn, TraceEntry, TurnContext
 from app.config import get_settings
@@ -59,6 +60,7 @@ class AgentState(TypedDict, total=False):
     session_id: str
     message: str
     safe_message: str
+    query: str  # what the knowledge base was searched with
     history: list[tuple[str, str]]
     blocked: bool
     context: list[RetrievedChunk]
@@ -155,6 +157,7 @@ class AgentRuntime:
             steps=state.get("steps", []),
             history=state.get("history", []),
             deadline=state.get("deadline"),
+            query=state.get("query", ""),
         )
 
     # ---------------------------------------------------------------- nodes
@@ -269,15 +272,22 @@ class AgentRuntime:
                 )
             }
 
-        result = self.kb.retrieve(
-            state["safe_message"], agent=agent, session_id=state["session_id"]
-        )
-        sanitized = sum(c.sanitized for c in result.chunks)
-        detail = f"{len(result.chunks)} chunk(s) used, {len(result.dropped)} dropped"
+        # A short follow-up ("and who approves the biggest ones?") is searched together
+        # with the question before it; on its own it would find unrelated passages.
+        query = conversation.search_query(state["safe_message"], state.get("history", []))
+        result = self.kb.retrieve(query, agent=agent, session_id=state["session_id"])
+        chunks = conversation.on_topic(result.chunks, query)
+        sanitized = sum(c.sanitized for c in chunks)
+        detail = f"{len(chunks)} chunk(s) used, {len(result.dropped)} dropped"
         if sanitized:
             detail += f", {sanitized} sanitized"
+        if len(chunks) < len(result.chunks):
+            detail += f", {len(result.chunks) - len(chunks)} off-topic or repeated set aside"
+        if query != state["safe_message"]:
+            detail += "; searched as a follow-up to the previous question"
         return {
-            "context": result.chunks,
+            "query": query,
+            "context": chunks,
             "dropped": result.dropped,
             "trace": self._trace(
                 state,
@@ -286,7 +296,7 @@ class AgentRuntime:
                     status="passed",
                     detail=detail + ".",
                     data={
-                        "sources": sorted({c.source for c in result.chunks}),
+                        "sources": sorted({c.source for c in chunks}),
                         "dropped": [f"{d.source}: {d.reason}" for d in result.dropped],
                     },
                 ),

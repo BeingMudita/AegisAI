@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     )
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout: int = 120
+    # Context window per call. Set explicitly: a prompt longer than Ollama's default
+    # window is cut silently, and the model never sees the end of the material.
+    ollama_num_ctx: int = 4096
+    # How long Ollama keeps the model loaded after a call; reloading 5 GB from disk
+    # makes the first reply after a pause slow. Loaded once at startup, too.
+    ollama_keep_alive: str = "30m"
     # auto = use Ollama when reachable, else the deterministic rule-based planner
     llm_backend: str = "auto"  # auto | ollama | rule_based
     agent_max_steps: int = 3

@@ -466,32 +466,44 @@ export function Pager({
   total,
   noun,
   onChange,
+  compact = false,
 }: {
   offset: number;
   pageSize: number;
   total: number;
   noun: string;
   onChange: (offset: number) => void;
+  /** Just the page buttons, for the top of a list (the full one goes below it). */
+  compact?: boolean;
 }) {
   if (total <= 0) return null;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.floor(offset / pageSize) + 1;
+  const last = (pages - 1) * pageSize;
+  const nav = pages > 1 && (
+    <nav className="flex items-center gap-1" aria-label={`Pages of ${noun}`}>
+      <Button variant="ghost" size="sm" disabled={offset === 0} onClick={() => onChange(0)} aria-label="First page">
+        «
+      </Button>
+      <Button variant="ghost" size="sm" disabled={offset === 0} onClick={() => onChange(Math.max(0, offset - pageSize))} aria-label="Previous page">
+        ‹
+      </Button>
+      <span className="tabular min-w-16 px-1 text-center" aria-live="polite">{formatNumber(page)} / {formatNumber(pages)}</span>
+      <Button variant="ghost" size="sm" disabled={page >= pages} onClick={() => onChange(offset + pageSize)} aria-label="Next page">
+        ›
+      </Button>
+      <Button variant="ghost" size="sm" disabled={page >= pages} onClick={() => onChange(last)} aria-label="Last page">
+        »
+      </Button>
+    </nav>
+  );
+  if (compact) return nav ? <div className="text-xs text-muted">{nav}</div> : null;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 pt-3 text-xs text-muted">
       <span className="tabular">
         Showing {formatNumber(offset + 1)}–{formatNumber(Math.min(offset + pageSize, total))} of {formatNumber(total)} {noun}
       </span>
-      {pages > 1 && (
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" disabled={offset === 0} onClick={() => onChange(Math.max(0, offset - pageSize))} aria-label="Previous page">
-            ‹
-          </Button>
-          <span className="tabular">{formatNumber(page)} / {formatNumber(pages)}</span>
-          <Button variant="ghost" size="sm" disabled={page >= pages} onClick={() => onChange(offset + pageSize)} aria-label="Next page">
-            ›
-          </Button>
-        </div>
-      )}
+      {nav}
     </div>
   );
 }

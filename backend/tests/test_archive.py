@@ -141,7 +141,11 @@ def test_archive_api_permissions_pagination_and_move(monkeypatch):
         app.dependency_overrides[get_current_user] = lambda: User(
             username="analyst", role=Role.SECURITY_ANALYST
         )
-        assert client.get("/api/retrieval/archive").json()[0]["section"] == "Unsorted"
+        listing = client.get("/api/retrieval/archive")
+        assert listing.json()[0]["section"] == "Unsorted"
+        etag = listing.headers["ETag"]
+        unchanged = client.get("/api/retrieval/archive", headers={"If-None-Match": etag})
+        assert unchanged.status_code == 304 and unchanged.content == b""
         assert client.get(path + "/archive-chunks").json()["total"] == 1
         assert client.get(path + "/archive-chunks?offset=-1").status_code == 422
         assert client.get(path + "/archive-chunks?limit=51").status_code == 422
@@ -149,6 +153,8 @@ def test_archive_api_permissions_pagination_and_move(monkeypatch):
         app.dependency_overrides[get_current_user] = lambda: User(username="admin", role=Role.ADMIN)
         response = client.put(path + "/location", json={"section": "Finance", "folder": "Invoices"})
         assert response.status_code == 200 and response.json()["folder"] == "Invoices"
+        moved = client.get("/api/retrieval/archive", headers={"If-None-Match": etag})
+        assert moved.status_code == 200 and moved.json()[0]["folder"] == "Invoices"
         assert client.put(path + "/location", json={"section": " "}).status_code == 422
         assert client.get("/api/retrieval/documents/missing/archive-chunks").status_code == 404
         assert client.put("/api/retrieval/documents/missing/location", json={}).status_code == 404

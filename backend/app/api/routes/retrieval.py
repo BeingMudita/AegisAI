@@ -13,7 +13,19 @@ from __future__ import annotations
 import hashlib
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from pydantic import TypeAdapter
 
 from app.auth.dependencies import get_current_user, require_roles
 from app.auth.roles import STAFF_ROLES, Role
@@ -56,10 +68,7 @@ def retrieval_status(
     """Knowledge-base status and pipeline counters. Pollers pass ``include_sources=false``
     to skip the per-source lists (thousands of entries in a large archive); the
     paged ``/sources`` endpoint serves them instead."""
-    stats = get_knowledge_base().stats()
-    if include_sources:
-        return stats
-    return stats.model_copy(update={"sources": [], "source_summaries": []})
+    return get_knowledge_base().stats(include_sources=include_sources)
 
 
 @router.get("/sources", response_model=SourcePage)
@@ -85,9 +94,18 @@ def search(req: SearchRequest, user: User = Depends(get_current_user)) -> Retrie
 
 
 # ------------------------------------------------------------------ documents
+_ARCHIVE = TypeAdapter(list[ArchiveDocument])
+
+
 @router.get("/archive", response_model=list[ArchiveDocument])
-def archive(user: User = Depends(require_roles(*STAFF_ROLES))) -> list[ArchiveDocument]:
-    return archive_documents(get_knowledge_base())
+def archive(request: Request, user: User = Depends(require_roles(*STAFF_ROLES))) -> Response:
+    """Every document, tagged with an ETag. The dashboard polls this listing (megabytes
+    for a large archive), so an unchanged one is answered with an empty 304."""
+    body = _ARCHIVE.dump_json(archive_documents(get_knowledge_base()))
+    etag = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(body, media_type="application/json", headers={"ETag": etag})
 
 
 @router.get("/documents/{document_id}/archive-chunks", response_model=ArchiveChunkPage)

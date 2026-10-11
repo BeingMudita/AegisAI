@@ -567,9 +567,14 @@ class KnowledgeBase:
 
         chunks: list[RetrievedChunk] = []
         dropped: list[DroppedChunk] = []
+        taken: set[str] = set()
         for stored, similarity in self._ranked(query, qvec, k):
             if len(chunks) >= k:
                 break
+            # The same file uploaded twice would fill the context with one passage.
+            if stored.content in taken:
+                continue
+            taken.add(stored.content)
 
             # Re-seed the source if the trust registry was reset.
             source_trust, reason = self.source_gate(stored.source, stored.declared_trust)
@@ -701,7 +706,9 @@ class KnowledgeBase:
         with self._lock:
             return list(self._quarantine)
 
-    def stats(self) -> KnowledgeBaseStats:
+    def stats(self, *, include_sources: bool = True) -> KnowledgeBaseStats:
+        """Counters for the whole index. ``include_sources=False`` skips the per-source
+        summaries (a trust lookup per source — thousands in a large archive)."""
         with self._lock:
             docs = list(self._documents.values())
             levels = dict(self._source_levels)
@@ -710,7 +717,7 @@ class KnowledgeBase:
         for d in docs:
             per_source.setdefault(d.source, []).append(d)
         summaries = []
-        for source, items in sorted(per_source.items()):
+        for source, items in sorted(per_source.items()) if include_sources else ():
             level = levels.get(source.lower(), items[0].trust_level)
             summaries.append(
                 SourceSummary(
@@ -732,7 +739,7 @@ class KnowledgeBase:
             chunks_quarantined=quarantined,
             sources=[s.source for s in summaries],
             source_summaries=summaries,
-            source_count=len(summaries),
+            source_count=len(per_source),
             memory_bytes=self.store.memory_bytes(),
             persisted=self.persist_dir is not None,
         )
@@ -759,7 +766,9 @@ def seed_knowledge_base(kb: KnowledgeBase, seed_dir: Path = SEED_DIR) -> list[In
     return reports
 
 
-@lru_cache
+_kb_lock = threading.RLock()
+
+
 def get_knowledge_base() -> KnowledgeBase:
     """Return the process-wide knowledge base.
 
@@ -767,6 +776,23 @@ def get_knowledge_base() -> KnowledgeBase:
     Otherwise the saved index in ``data/index`` is loaded when persistence is on.
     Either way the demo corpus is seeded the first time the store is empty.
     """
+    # lru_cache alone lets requests that arrive together each build it — loading a
+    # large saved index once per request. The lock makes the first build the only one.
+    with _kb_lock:
+        return _build_knowledge_base()
+
+
+def preload_knowledge_base() -> None:
+    """Load the saved index in the background at startup, so opening the dashboard
+    doesn't wait for it."""
+    try:
+        get_knowledge_base()
+    except Exception as exc:  # a request will retry and report it
+        logger.warning("knowledge_base_preload_failed", error=str(exc))
+
+
+@lru_cache
+def _build_knowledge_base() -> KnowledgeBase:
     settings = get_settings()
     kwargs: dict[str, Any] = {
         "embedder": get_embedder(),

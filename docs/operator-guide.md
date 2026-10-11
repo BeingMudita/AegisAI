@@ -73,6 +73,23 @@ inside its own region and the execution monitor is a disclosure above the chat.
   Retention is the only way events leave the durable audit log. Set a value to
   `0` to keep that data forever. `aegis retention` runs one pass by hand. An
   expired session refuses new messages; the caller starts a new session.
+- **Local LLM.** With `LLM_BACKEND=auto` the API checks for Ollama once, at
+  startup. If Ollama isn't running then, the agents use the rule-based planner
+  until the API restarts, so start Ollama first.
+  - At startup the API loads `MODEL_NAME` in the background.
+  - `OLLAMA_KEEP_ALIVE` (30m) keeps the model in memory between turns.
+  - `OLLAMA_NUM_CTX` (4096) sets each call's context window. Ollama silently cuts
+    longer prompts.
+  - A turn makes as few calls as it can. Small talk is one call. A request that
+    names its tools ("which invoices are overdue? put them in a report") is
+    planned without the LLM, so it takes one call for the answer. Any other
+    question takes a planning call plus the answer.
+  - A reply that is a long run of one character ("8888…") means the Ollama
+    runner is stuck. The API answers with the rule-based planner instead and logs
+    `ollama_degenerate_output`. Restart Ollama to clear it.
+  - On a GPU with less memory than the model needs, part of the model runs on
+    the CPU, and each call takes several seconds. `qwen2.5:1.5b` is the faster,
+    pinned alternative.
 - **Budgets.** Every user and API caller has daily limits on turns, tokens and
   cost. The limits reset at 00:00 UTC and are set under `budgets:` in
   `default_policies.yaml`, with per-role and per-principal overrides.

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.auth.dependencies import require_roles
 from app.auth.roles import STAFF_ROLES, Role
 from app.auth.schemas import User
-from app.database.enums import SubjectType
+from app.database.enums import SubjectType, TrustLevel
 from app.trust.engine import get_trust_engine
 from app.trust.schemas import TrustAssessmentRecord, TrustOverride, TrustScoreDetail
 
@@ -21,26 +21,36 @@ router = APIRouter(prefix="/trust", tags=["trust"])
 def list_trust_scores(
     subject_type: SubjectType | None = None,
     q: str | None = Query(None, max_length=200),
+    level: TrustLevel | None = None,
     offset: int = Query(0, ge=0),
     limit: int | None = Query(None, ge=1, le=1000),
     user: User = Depends(require_roles(*STAFF_ROLES)),
 ) -> dict:
-    """List current trust scores, lowest first. ``q`` matches the subject name; with
-    ``limit`` only that page is returned (``total`` counts every match)."""
+    """List current trust scores, lowest first. ``q`` matches the subject name and
+    ``level`` the trust level; with ``limit`` only that page is returned (``total``
+    counts every match). ``levels`` counts the matches of each level before the level
+    filter, so a client can show how many subjects each choice would list."""
     engine = get_trust_engine()
     scores = engine.list_scores(subject_type)
     if q:
         needle = q.casefold()
         scores = [s for s in scores if needle in s.subject_id.casefold()]
+    levels = {lv.value: 0 for lv in TrustLevel}
+    for s in scores:
+        levels[s.level.value] += 1
+    if level is not None:
+        scores = [s for s in scores if s.level == level]
     page = scores[offset : offset + limit] if limit else scores[offset:]
     return {
         "scores": [s.model_dump(mode="json") for s in page],
         "threshold": engine.default_threshold,
         "total": len(scores),
+        "levels": levels,
     }
 
 
-@router.get("/{subject_type}/{subject_id}", response_model=TrustScoreDetail)
+# ``:path`` because source names are file paths ("corpus/documents/invoice/FIN-….txt").
+@router.get("/{subject_type}/{subject_id:path}", response_model=TrustScoreDetail)
 def get_trust_score(
     subject_type: SubjectType,
     subject_id: str,
@@ -56,7 +66,7 @@ def get_trust_score(
     return detail
 
 
-@router.put("/{subject_type}/{subject_id}", response_model=TrustAssessmentRecord)
+@router.put("/{subject_type}/{subject_id:path}", response_model=TrustAssessmentRecord)
 def override_trust_score(
     subject_type: SubjectType,
     subject_id: str,

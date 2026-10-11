@@ -13,6 +13,7 @@ from app.database.enums import SecurityEventType, SubjectType
 from app.main import app
 from app.rag.schemas import RetrievedChunk
 from app.telemetry.store import get_audit_log
+from app.tools.gateway import get_tool_gateway
 from app.trust.engine import get_trust_engine
 
 client = TestClient(app)
@@ -139,7 +140,7 @@ class _FakeClient(OllamaClient):
         super().__init__("http://ollama.invalid", "fake", 1)
         self.reply = reply
 
-    def chat(self, messages, *, json_mode=False, timeout=None):  # type: ignore[no-untyped-def, override]
+    def chat(self, messages, *, json_mode=False, timeout=None, max_tokens=None):  # type: ignore[no-untyped-def, override]
         self.messages = messages
         if isinstance(self.reply, Exception):
             raise self.reply
@@ -150,7 +151,9 @@ def test_ollama_brain_parses_tool_call() -> None:
     reply = json.dumps(
         {"action": "tool", "tool": "read_database", "arguments": {"table": "invoices"}}
     )
-    action = OllamaBrain(_FakeClient(reply)).decide(_ctx("anything"))
+    ctx = _ctx("anything")
+    ctx.tools = get_tool_gateway().available_tools("FinanceAgent")
+    action = OllamaBrain(_FakeClient(reply)).decide(ctx)
     assert action.tool == "read_database"
     assert action.arguments == {"table": "invoices"}
 

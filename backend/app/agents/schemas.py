@@ -39,6 +39,9 @@ class TurnContext:
     steps: list[ToolCallResult] = field(default_factory=list)
     history: list[tuple[str, str]] = field(default_factory=list)
     deadline: float | None = None  # time.monotonic() by which the turn must finish
+    # What the knowledge base was searched with: the message, or for a short follow-up
+    # the previous question plus the message. Empty = the message itself.
+    query: str = ""
 
 
 class TraceEntry(BaseModel):
