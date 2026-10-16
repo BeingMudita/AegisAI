@@ -1,7 +1,7 @@
 # AegisAI backend image
 #   docker build -f docker/Dockerfile.backend .                       # slim (hashing embedder)
 #   docker build -f docker/Dockerfile.backend --build-arg INSTALL_ML=true .   # + sentence-transformers
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ARG INSTALL_ML=false
 
